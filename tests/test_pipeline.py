@@ -165,6 +165,8 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("formBinaryMode", html)
         self.assertIn("autoConfidence", html)
         self.assertIn("autoFound", html)
+        self.assertIn("workspaceEl.classList.toggle(\"has-ocr\"", html)
+        self.assertIn("grid-template-columns: minmax(520px, 1fr) minmax(360px, 440px)", html)
         self.assertIn("件目を上へ移動", html)
         self.assertIn("端末内でPDFを生成中", html)
         self.assertIn("PocketCV 画像処理レポート", html)
