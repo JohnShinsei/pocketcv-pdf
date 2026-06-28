@@ -335,6 +335,8 @@
         display: flex;
         align-items: center;
         gap: 6px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
       }
 
       .page-footer span {
@@ -376,6 +378,71 @@
         padding: 24px;
       }
 
+      .corner-dialog {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: grid;
+        place-items: center;
+        padding: 16px;
+        background: rgba(15, 18, 23, 0.7);
+      }
+
+      .corner-dialog[hidden] {
+        display: none;
+      }
+
+      .corner-panel {
+        width: min(100%, 1040px);
+        max-height: calc(100vh - 32px);
+        border-radius: 8px;
+        background: #ffffff;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        overflow: hidden;
+        box-shadow: var(--shadow);
+      }
+
+      .corner-header,
+      .corner-actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .corner-actions {
+        border-top: 1px solid var(--line);
+        border-bottom: 0;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+      }
+
+      .corner-title {
+        margin: 0;
+        font-size: 18px;
+      }
+
+      .corner-stage {
+        min-height: 0;
+        padding: 14px;
+        overflow: auto;
+        background: #0f1217;
+      }
+
+      .corner-canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+        min-height: 0;
+        border-radius: 8px;
+        background: #0f1217;
+        touch-action: none;
+        cursor: crosshair;
+      }
+
       @media (max-width: 860px) {
         .app {
           grid-template-columns: 1fr;
@@ -414,6 +481,10 @@
 
         .mode-wrap {
           width: 100%;
+        }
+
+        .corner-panel {
+          max-height: calc(100vh - 18px);
         }
       }
     </style>
@@ -484,6 +555,22 @@
       </section>
     </main>
 
+    <div id="corner-dialog" class="corner-dialog" hidden>
+      <section class="corner-panel" role="dialog" aria-modal="true" aria-labelledby="corner-title">
+        <div class="corner-header">
+          <h2 id="corner-title" class="corner-title">四隅を調整</h2>
+          <button id="corner-close" class="mini" type="button">閉じる</button>
+        </div>
+        <div class="corner-stage">
+          <canvas id="corner-editor-canvas" class="corner-canvas"></canvas>
+        </div>
+        <div class="corner-actions">
+          <button id="corner-reset" type="button">自動角に戻す</button>
+          <button id="corner-apply" class="primary" type="button">この四隅で生成</button>
+        </div>
+      </section>
+    </div>
+
     <script>
       const MAX_IMAGE_DIMENSION = 1800;
       const A4_WIDTH = 595.28;
@@ -502,6 +589,14 @@
         busy: false,
       };
 
+      const cornerEditor = {
+        pageIndex: -1,
+        corners: null,
+        autoCorners: null,
+        scale: 1,
+        draggingIndex: -1,
+      };
+
       const video = document.querySelector("#video");
       const canvas = document.querySelector("#canvas");
       const empty = document.querySelector("#empty");
@@ -518,6 +613,11 @@
       const installButton = document.querySelector("#install");
       const filenameInput = document.querySelector("#filename");
       const modeEl = document.querySelector("#mode");
+      const cornerDialog = document.querySelector("#corner-dialog");
+      const cornerCanvas = document.querySelector("#corner-editor-canvas");
+      const cornerCloseButton = document.querySelector("#corner-close");
+      const cornerResetButton = document.querySelector("#corner-reset");
+      const cornerApplyButton = document.querySelector("#corner-apply");
 
       function clamp(value, min, max) {
         return Math.max(min, Math.min(max, value));
@@ -532,6 +632,8 @@
         pdfButton.disabled = value || state.pages.length === 0;
         shareButton.disabled = value || !state.pdfBlob;
         installButton.disabled = value || !state.deferredInstallPrompt;
+        cornerResetButton.disabled = value;
+        cornerApplyButton.disabled = value;
       }
 
       function setStatus(message, isError = false) {
@@ -574,6 +676,20 @@
           return `${Math.round((bytes / 1024 / 1024) * 10) / 10} MB`;
         }
         return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+      }
+
+      function cloneCorners(corners) {
+        return corners ? corners.map((point) => ({ x: point.x, y: point.y })) : null;
+      }
+
+      function fallbackCorners(sourceCanvas) {
+        const margin = Math.max(12, Math.min(sourceCanvas.width, sourceCanvas.height) * 0.05);
+        return [
+          { x: margin, y: margin },
+          { x: sourceCanvas.width - margin, y: margin },
+          { x: sourceCanvas.width - margin, y: sourceCanvas.height - margin },
+          { x: margin, y: sourceCanvas.height - margin },
+        ];
       }
 
       function revokePdfUrl() {
@@ -660,12 +776,21 @@
             refreshPages();
           });
 
-          actions.append(moveUp, moveDown, remove);
+          const corners = document.createElement("button");
+          corners.className = "mini";
+          corners.type = "button";
+          corners.textContent = "角調整";
+          corners.ariaLabel = `${index + 1}件目の四隅を調整`;
+          corners.addEventListener("click", () => openCornerEditor(index));
+
+          actions.append(corners, moveUp, moveDown, remove);
           footer.append(label, actions);
           const meta = document.createElement("div");
           meta.className = "page-meta";
           meta.textContent = page.metrics
-            ? `品質 ${Math.round(page.metrics.qualityScore)} · ${qualityLabel(page.metrics.qualityScore)} · 透視補正 ${Math.round(
+            ? `品質 ${Math.round(page.metrics.qualityScore)} · ${qualityLabel(page.metrics.qualityScore)} · ${
+                page.manualCorners ? "手動補正" : "自動補正"
+              } ${Math.round(
                 page.metrics.perspectiveConfidence * 100
               )}% · エッジ ${
                 Math.round(page.metrics.edgeDensity * 1000) / 10
@@ -970,16 +1095,28 @@
         return output;
       }
 
-      function perspectiveCorrectCanvas(sourceCanvas) {
+      function perspectiveCorrectCanvas(sourceCanvas, manualCorners = null) {
         const detection = detectDocumentQuad(sourceCanvas);
-        if (!detection.found) {
-          return { canvas: sourceCanvas, detection };
+        const selectedCorners = manualCorners || (detection.found ? detection.corners : null);
+        if (!selectedCorners) {
+          return { canvas: sourceCanvas, detection, autoCorners: null };
         }
 
         try {
-          return { canvas: warpPerspectiveCanvas(sourceCanvas, detection.corners), detection };
+          const isManual = Boolean(manualCorners);
+          return {
+            canvas: warpPerspectiveCanvas(sourceCanvas, selectedCorners),
+            detection: {
+              ...detection,
+              found: true,
+              confidence: isManual ? 0.99 : detection.confidence,
+              corners: cloneCorners(selectedCorners),
+              manual: isManual,
+            },
+            autoCorners: detection.found ? cloneCorners(detection.corners) : null,
+          };
         } catch (error) {
-          return { canvas: sourceCanvas, detection: { ...detection, found: false, confidence: 0 } };
+          return { canvas: sourceCanvas, detection: { ...detection, found: false, confidence: 0 }, autoCorners: null };
         }
       }
 
@@ -1239,24 +1376,31 @@
         return report;
       }
 
-      async function processBlob(blob, name) {
+      async function processSourceCanvas(sourceCanvas, sourceBlob, name, manualCorners = null) {
         const renderMode = modeEl.value;
-        const image = await loadImage(blob);
-        const sourceCanvas = drawImageToCanvas(image);
-        const corrected = perspectiveCorrectCanvas(sourceCanvas);
+        const corrected = perspectiveCorrectCanvas(sourceCanvas, manualCorners);
         const enhanced = enhanceCanvas(corrected.canvas, renderMode, corrected.detection);
         const processedCanvas =
           renderMode === "report" ? buildAnalysisCanvas(sourceCanvas, enhanced.canvas, enhanced.edgeCanvas, enhanced.metrics) : enhanced.canvas;
         const processedBlob = await canvasToBlob(processedCanvas, "image/jpeg", 0.92);
         return {
-          sourceBlob: blob,
+          sourceBlob,
+          sourceCanvas,
           name,
           displayName: name.replace(/\.[^.]+$/, "").slice(0, 28),
           canvas: processedCanvas,
           pdfMode: renderMode,
           metrics: enhanced.metrics,
+          autoCorners: corrected.autoCorners || fallbackCorners(sourceCanvas),
+          manualCorners: cloneCorners(manualCorners),
           previewUrl: URL.createObjectURL(processedBlob),
         };
+      }
+
+      async function processBlob(blob, name, manualCorners = null) {
+        const image = await loadImage(blob);
+        const sourceCanvas = drawImageToCanvas(image);
+        return processSourceCanvas(sourceCanvas, blob, name, manualCorners);
       }
 
       async function addBlob(blob, name) {
@@ -1282,11 +1426,11 @@
         setBusy(true);
         setStatus("端末内で再処理中...");
         try {
-          const sourcePages = state.pages.map((page) => ({ blob: page.sourceBlob, name: page.name }));
+          const sourcePages = state.pages.map((page) => ({ blob: page.sourceBlob, name: page.name, manualCorners: cloneCorners(page.manualCorners) }));
           state.pages.forEach((page) => URL.revokeObjectURL(page.previewUrl));
           state.pages = [];
           for (const page of sourcePages) {
-            state.pages.push(await processBlob(page.blob, page.name));
+            state.pages.push(await processBlob(page.blob, page.name, page.manualCorners));
           }
           refreshPages();
         } catch (error) {
@@ -1294,6 +1438,223 @@
           setStatus(error.message || "再処理できませんでした。", true);
         }
       }
+
+      function setupCornerCanvas(page) {
+        const maxWidth = Math.max(280, Math.min(980, window.innerWidth - 64));
+        const maxHeight = Math.max(360, Math.min(720, window.innerHeight - 190));
+        cornerEditor.scale = Math.min(1, maxWidth / page.sourceCanvas.width, maxHeight / page.sourceCanvas.height);
+        cornerCanvas.width = Math.max(1, Math.round(page.sourceCanvas.width * cornerEditor.scale));
+        cornerCanvas.height = Math.max(1, Math.round(page.sourceCanvas.height * cornerEditor.scale));
+      }
+
+      function toEditorPoint(sourcePoint) {
+        return {
+          x: sourcePoint.x * cornerEditor.scale,
+          y: sourcePoint.y * cornerEditor.scale,
+        };
+      }
+
+      function eventToSourcePoint(event) {
+        const rect = cornerCanvas.getBoundingClientRect();
+        const canvasX = ((event.clientX - rect.left) / rect.width) * cornerCanvas.width;
+        const canvasY = ((event.clientY - rect.top) / rect.height) * cornerCanvas.height;
+        const page = state.pages[cornerEditor.pageIndex];
+        return {
+          x: clamp(canvasX / cornerEditor.scale, 0, page.sourceCanvas.width - 1),
+          y: clamp(canvasY / cornerEditor.scale, 0, page.sourceCanvas.height - 1),
+        };
+      }
+
+      function drawCornerEditor() {
+        const page = state.pages[cornerEditor.pageIndex];
+        if (!page || !cornerEditor.corners) {
+          return;
+        }
+
+        const context = cornerCanvas.getContext("2d");
+        context.clearRect(0, 0, cornerCanvas.width, cornerCanvas.height);
+        context.drawImage(page.sourceCanvas, 0, 0, cornerCanvas.width, cornerCanvas.height);
+
+        const points = cornerEditor.corners.map(toEditorPoint);
+        context.save();
+        context.fillStyle = "rgba(21, 127, 114, 0.16)";
+        context.strokeStyle = "#10b59f";
+        context.lineWidth = 3;
+        context.beginPath();
+        points.forEach((point, index) => {
+          if (index === 0) {
+            context.moveTo(point.x, point.y);
+          } else {
+            context.lineTo(point.x, point.y);
+          }
+        });
+        context.closePath();
+        context.fill();
+        context.stroke();
+
+        const labels = ["左上", "右上", "右下", "左下"];
+        points.forEach((point, index) => {
+          context.beginPath();
+          context.fillStyle = index === cornerEditor.draggingIndex ? "#d9892b" : "#157f72";
+          context.strokeStyle = "#ffffff";
+          context.lineWidth = 4;
+          context.arc(point.x, point.y, 14, 0, Math.PI * 2);
+          context.fill();
+          context.stroke();
+          context.font = "900 13px 'Yu Gothic', 'Noto Sans JP', Arial, sans-serif";
+          context.textAlign = "center";
+          context.textBaseline = "middle";
+          context.fillStyle = "#ffffff";
+          context.fillText(labels[index], point.x, point.y);
+        });
+        context.restore();
+      }
+
+      function nearestCornerIndex(event) {
+        const rect = cornerCanvas.getBoundingClientRect();
+        const canvasX = ((event.clientX - rect.left) / rect.width) * cornerCanvas.width;
+        const canvasY = ((event.clientY - rect.top) / rect.height) * cornerCanvas.height;
+        let bestIndex = -1;
+        let bestDistance = Infinity;
+        cornerEditor.corners.map(toEditorPoint).forEach((point, index) => {
+          const distance = Math.hypot(point.x - canvasX, point.y - canvasY);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            bestIndex = index;
+          }
+        });
+        return bestDistance <= 72 ? bestIndex : -1;
+      }
+
+      function closestCornerIndex(event) {
+        const rect = cornerCanvas.getBoundingClientRect();
+        const canvasX = ((event.clientX - rect.left) / rect.width) * cornerCanvas.width;
+        const canvasY = ((event.clientY - rect.top) / rect.height) * cornerCanvas.height;
+        let bestIndex = 0;
+        let bestDistance = Infinity;
+        cornerEditor.corners.map(toEditorPoint).forEach((point, index) => {
+          const distance = Math.hypot(point.x - canvasX, point.y - canvasY);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            bestIndex = index;
+          }
+        });
+        return bestIndex;
+      }
+
+      function openCornerEditor(pageIndex) {
+        const page = state.pages[pageIndex];
+        if (!page) {
+          return;
+        }
+
+        cornerEditor.pageIndex = pageIndex;
+        cornerEditor.autoCorners = cloneCorners(page.autoCorners) || fallbackCorners(page.sourceCanvas);
+        cornerEditor.corners = cloneCorners(page.manualCorners || page.autoCorners) || fallbackCorners(page.sourceCanvas);
+        cornerEditor.draggingIndex = -1;
+        setupCornerCanvas(page);
+        cornerDialog.hidden = false;
+        drawCornerEditor();
+      }
+
+      function closeCornerEditor() {
+        cornerDialog.hidden = true;
+        cornerEditor.pageIndex = -1;
+        cornerEditor.corners = null;
+        cornerEditor.autoCorners = null;
+        cornerEditor.draggingIndex = -1;
+      }
+
+      async function applyCornerEditor() {
+        const page = state.pages[cornerEditor.pageIndex];
+        if (!page || !cornerEditor.corners) {
+          return;
+        }
+
+        const pageIndex = cornerEditor.pageIndex;
+        const manualCorners = cloneCorners(cornerEditor.corners);
+        revokePdfUrl();
+        setBusy(true);
+        setStatus("四隅からスキャンを再生成中...");
+        try {
+          const updatedPage = await processSourceCanvas(page.sourceCanvas, page.sourceBlob, page.name, manualCorners);
+          URL.revokeObjectURL(page.previewUrl);
+          state.pages[pageIndex] = updatedPage;
+          closeCornerEditor();
+          refreshPages();
+          setStatus("手動の四隅で再生成しました。");
+        } catch (error) {
+          setBusy(false);
+          setStatus(error.message || "四隅から再生成できませんでした。", true);
+        }
+      }
+
+      cornerCloseButton.addEventListener("click", closeCornerEditor);
+      cornerDialog.addEventListener("click", (event) => {
+        if (event.target === cornerDialog) {
+          closeCornerEditor();
+        }
+      });
+
+      cornerResetButton.addEventListener("click", () => {
+        const page = state.pages[cornerEditor.pageIndex];
+        if (!page) {
+          return;
+        }
+        cornerEditor.corners = cloneCorners(cornerEditor.autoCorners) || fallbackCorners(page.sourceCanvas);
+        drawCornerEditor();
+      });
+
+      cornerApplyButton.addEventListener("click", applyCornerEditor);
+
+      cornerCanvas.addEventListener("pointerdown", (event) => {
+        if (cornerDialog.hidden || !cornerEditor.corners) {
+          return;
+        }
+        event.preventDefault();
+        cornerEditor.draggingIndex = nearestCornerIndex(event);
+        if (cornerEditor.draggingIndex === -1) {
+          cornerEditor.draggingIndex = closestCornerIndex(event);
+          cornerEditor.corners[cornerEditor.draggingIndex] = eventToSourcePoint(event);
+        }
+        cornerCanvas.setPointerCapture(event.pointerId);
+        drawCornerEditor();
+      });
+
+      cornerCanvas.addEventListener("pointermove", (event) => {
+        if (cornerEditor.draggingIndex === -1 || !cornerEditor.corners) {
+          return;
+        }
+        event.preventDefault();
+        cornerEditor.corners[cornerEditor.draggingIndex] = eventToSourcePoint(event);
+        drawCornerEditor();
+      });
+
+      cornerCanvas.addEventListener("pointerup", (event) => {
+        if (cornerEditor.draggingIndex !== -1) {
+          cornerCanvas.releasePointerCapture(event.pointerId);
+        }
+        cornerEditor.draggingIndex = -1;
+        drawCornerEditor();
+      });
+
+      cornerCanvas.addEventListener("pointercancel", () => {
+        cornerEditor.draggingIndex = -1;
+        drawCornerEditor();
+      });
+
+      window.addEventListener("resize", () => {
+        if (!cornerDialog.hidden && cornerEditor.pageIndex >= 0) {
+          setupCornerCanvas(state.pages[cornerEditor.pageIndex]);
+          drawCornerEditor();
+        }
+      });
+
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !cornerDialog.hidden) {
+          closeCornerEditor();
+        }
+      });
 
       async function startCamera() {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
