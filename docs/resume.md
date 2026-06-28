@@ -2,7 +2,7 @@
 
 ## One-line project description
 
-PocketCV PDF is a privacy-first mobile document scanner that captures or imports phone photos, enhances them into standalone scanned images/PDFs, and keeps optional analysis reports for debugging image quality.
+PocketCV PDF is a privacy-first mobile document scanner that captures or imports phone photos, enhances them into standalone scanned images/PDFs, runs browser-side OCR, and restores OCR output into Markdown document structure.
 
 ## Resume bullets
 
@@ -11,6 +11,7 @@ PocketCV PDF is a privacy-first mobile document scanner that captures or imports
 - Designed a public GitHub-ready project with a Python package, CLI, optional FastAPI dev server, synthetic image tests, and reproducible sample generation.
 - Implemented quality metrics such as Laplacian sharpness, contrast, edge density, exposure balance, and score deltas to make image enhancement measurable.
 - Added browser-side Tesseract.js OCR over the enhanced scan output with copy and TXT export, structured as the second stage before document layout recovery.
+- Implemented layout recovery heuristics that use OCR line bounding boxes to detect columns, headings, and paragraphs, then export Markdown.
 
 ## Interview talking points
 
@@ -20,4 +21,4 @@ PocketCV PDF is a privacy-first mobile document scanner that captures or imports
 - How edge maps, contrast metrics, and perspective confidence make the project demonstrably about image processing rather than simple file conversion.
 - How the project handles failure cases by falling back to the original image border with low confidence.
 - Why synthetic test images are useful for public computer vision repositories when real user documents cannot be committed.
-- Why OCR should consume the cleaned scan output instead of raw phone photos, and how layout recovery can use OCR positions in the next stage.
+- Why OCR should consume the cleaned scan output instead of raw phone photos, and how OCR positions can be converted into readable Markdown structure.

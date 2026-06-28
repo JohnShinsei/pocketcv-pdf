@@ -362,6 +362,28 @@
         font: 14px/1.65 "Noto Sans JP", "Yu Gothic", ui-monospace, SFMono-Regular, Consolas, monospace;
       }
 
+      .ocr-body {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        border-top: 1px solid var(--line);
+      }
+
+      .ocr-result {
+        min-width: 0;
+      }
+
+      .ocr-result + .ocr-result {
+        border-left: 1px solid var(--line);
+      }
+
+      .ocr-label {
+        display: block;
+        padding: 10px 12px 0;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
       .pages {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -551,6 +573,15 @@
           flex: 1 1 136px;
         }
 
+        .ocr-body {
+          grid-template-columns: 1fr;
+        }
+
+        .ocr-result + .ocr-result {
+          border-left: 0;
+          border-top: 1px solid var(--line);
+        }
+
         .brand {
           align-items: flex-start;
           flex-direction: column;
@@ -643,11 +674,23 @@
                 <option value="chi_sim+eng">中国語簡体字+英語</option>
               </select>
               <button id="ocr-run" class="secondary-action" type="button" disabled>OCR実行</button>
-              <button id="ocr-copy" class="secondary-action" type="button" disabled>コピー</button>
+              <button id="layout-run" class="secondary-action" type="button" disabled>文書復元</button>
+              <button id="ocr-copy" class="secondary-action" type="button" disabled>OCRコピー</button>
               <button id="ocr-download" class="secondary-action" type="button" disabled>TXT保存</button>
+              <button id="layout-copy" class="secondary-action" type="button" disabled>MDコピー</button>
+              <button id="layout-download" class="secondary-action" type="button" disabled>MD保存</button>
             </div>
           </div>
-          <textarea id="ocr-output" class="ocr-output" readonly placeholder="OCR結果"></textarea>
+          <div class="ocr-body">
+            <div class="ocr-result">
+              <label class="ocr-label" for="ocr-output">OCRテキスト</label>
+              <textarea id="ocr-output" class="ocr-output" readonly placeholder="OCR結果"></textarea>
+            </div>
+            <div class="ocr-result">
+              <label class="ocr-label" for="layout-output">復元Markdown</label>
+              <textarea id="layout-output" class="ocr-output" readonly placeholder="文書復元結果"></textarea>
+            </div>
+          </div>
         </section>
       </section>
     </main>
@@ -685,8 +728,11 @@
         pdfBlob: null,
         pdfName: "",
         ocrText: "",
+        ocrPages: [],
         ocrConfidence: null,
         ocrBusy: false,
+        layoutText: "",
+        layoutBusy: false,
         deferredInstallPrompt: null,
         busy: false,
       };
@@ -719,9 +765,13 @@
       const ocrStatusEl = document.querySelector("#ocr-status");
       const ocrLangEl = document.querySelector("#ocr-lang");
       const ocrRunButton = document.querySelector("#ocr-run");
+      const layoutRunButton = document.querySelector("#layout-run");
       const ocrCopyButton = document.querySelector("#ocr-copy");
       const ocrDownloadButton = document.querySelector("#ocr-download");
+      const layoutCopyButton = document.querySelector("#layout-copy");
+      const layoutDownloadButton = document.querySelector("#layout-download");
       const ocrOutputEl = document.querySelector("#ocr-output");
+      const layoutOutputEl = document.querySelector("#layout-output");
       const cornerDialog = document.querySelector("#corner-dialog");
       const cornerCanvas = document.querySelector("#corner-editor-canvas");
       const cornerCloseButton = document.querySelector("#corner-close");
@@ -733,11 +783,15 @@
       }
 
       function syncOcrControls() {
-        ocrPanel.hidden = state.pages.length === 0 && !state.ocrText;
-        ocrLangEl.disabled = state.busy || state.ocrBusy || state.pages.length === 0;
-        ocrRunButton.disabled = state.busy || state.ocrBusy || state.pages.length === 0;
-        ocrCopyButton.disabled = state.busy || state.ocrBusy || !state.ocrText;
-        ocrDownloadButton.disabled = state.busy || state.ocrBusy || !state.ocrText;
+        const blocked = state.busy || state.ocrBusy || state.layoutBusy;
+        ocrPanel.hidden = state.pages.length === 0 && !state.ocrText && !state.layoutText;
+        ocrLangEl.disabled = blocked || state.pages.length === 0;
+        ocrRunButton.disabled = blocked || state.pages.length === 0;
+        layoutRunButton.disabled = blocked || state.ocrPages.length === 0;
+        ocrCopyButton.disabled = blocked || !state.ocrText;
+        ocrDownloadButton.disabled = blocked || !state.ocrText;
+        layoutCopyButton.disabled = blocked || !state.layoutText;
+        layoutDownloadButton.disabled = blocked || !state.layoutText;
       }
 
       function setBusy(value) {
@@ -766,14 +820,22 @@
 
       function resetOcrResult() {
         state.ocrText = "";
+        state.ocrPages = [];
         state.ocrConfidence = null;
+        state.layoutText = "";
         ocrOutputEl.value = "";
+        layoutOutputEl.value = "";
         setOcrStatus(state.pages.length ? "未実行" : "画像なし");
         syncOcrControls();
       }
 
       function setOcrBusy(value) {
         state.ocrBusy = value;
+        syncOcrControls();
+      }
+
+      function setLayoutBusy(value) {
+        state.layoutBusy = value;
         syncOcrControls();
       }
 
@@ -1057,6 +1119,356 @@
         return page.ocrCanvas;
       }
 
+      function normalizeOcrText(text) {
+        return String(text || "")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function normalizeOcrBox(source, width, height) {
+        if (!source) {
+          return null;
+        }
+        const x0 = Number(source.x0 ?? source.left ?? source.x ?? 0);
+        const y0 = Number(source.y0 ?? source.top ?? source.y ?? 0);
+        const x1 = Number(source.x1 ?? source.right ?? (Number(source.x) + Number(source.width)) ?? 0);
+        const y1 = Number(source.y1 ?? source.bottom ?? (Number(source.y) + Number(source.height)) ?? 0);
+        if (![x0, y0, x1, y1].every(Number.isFinite) || x1 <= x0 || y1 <= y0) {
+          return null;
+        }
+        return {
+          x0: clamp(Math.round(x0), 0, width),
+          y0: clamp(Math.round(y0), 0, height),
+          x1: clamp(Math.round(x1), 0, width),
+          y1: clamp(Math.round(y1), 0, height),
+        };
+      }
+
+      function unionOcrBoxes(items) {
+        const boxes = items.map((item) => item.bbox).filter(Boolean);
+        if (!boxes.length) {
+          return null;
+        }
+        return {
+          x0: Math.min(...boxes.map((box) => box.x0)),
+          y0: Math.min(...boxes.map((box) => box.y0)),
+          x1: Math.max(...boxes.map((box) => box.x1)),
+          y1: Math.max(...boxes.map((box) => box.y1)),
+        };
+      }
+
+      function collectOcrWords(container, width, height) {
+        const rawWords = Array.isArray(container && container.words) ? container.words : [];
+        return rawWords
+          .map((word) => ({
+            text: normalizeOcrText(word.text),
+            confidence: Number(word.confidence),
+            bbox: normalizeOcrBox(word.bbox || word, width, height),
+          }))
+          .filter((word) => word.text);
+      }
+
+      function median(values) {
+        const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+        if (!sorted.length) {
+          return 0;
+        }
+        return sorted[Math.floor(sorted.length / 2)];
+      }
+
+      function createLineFromWords(words) {
+        const lineWords = words.sort((a, b) => a.bbox.x0 - b.bbox.x0);
+        return {
+          text: lineWords.map((word) => word.text).join(" "),
+          confidence: median(lineWords.map((word) => word.confidence)),
+          bbox: unionOcrBoxes(lineWords),
+          words: lineWords,
+        };
+      }
+
+      function splitWordGroupByColumnGap(words, width) {
+        const sorted = [...words].sort((a, b) => a.bbox.x0 - b.bbox.x0);
+        const groups = [];
+        let current = [];
+        let previous = null;
+        sorted.forEach((word) => {
+          const gap = previous ? word.bbox.x0 - previous.bbox.x1 : 0;
+          if (previous && gap > width * 0.11) {
+            groups.push(current);
+            current = [];
+          }
+          current.push(word);
+          previous = word;
+        });
+        if (current.length) {
+          groups.push(current);
+        }
+        return groups;
+      }
+
+      function groupWordsIntoLines(words, width) {
+        if (!words.length) {
+          return [];
+        }
+        const sorted = [...words].sort((a, b) => a.bbox.y0 - b.bbox.y0 || a.bbox.x0 - b.bbox.x0);
+        const medianHeight = Math.max(8, median(sorted.map((word) => word.bbox.y1 - word.bbox.y0)));
+        const groups = [];
+        sorted.forEach((word) => {
+          const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
+          let group = groups.find((candidate) => Math.abs(candidate.centerY - centerY) <= medianHeight * 0.72);
+          if (!group) {
+            group = { centerY, words: [] };
+            groups.push(group);
+          }
+          group.words.push(word);
+          group.centerY = (group.centerY * (group.words.length - 1) + centerY) / group.words.length;
+        });
+        return groups.flatMap((group) => splitWordGroupByColumnGap(group.words, width).map(createLineFromWords));
+      }
+
+      function collectOcrLines(data, width, height) {
+        let rawLines = [];
+        if (Array.isArray(data.lines) && data.lines.length) {
+          rawLines = data.lines;
+        } else if (Array.isArray(data.blocks)) {
+          data.blocks.forEach((block) => {
+            (block.paragraphs || []).forEach((paragraph) => {
+              rawLines.push(...(paragraph.lines || []));
+            });
+          });
+        }
+
+        const rawLineWords = rawLines.flatMap((line) => collectOcrWords(line, width, height)).filter((word) => word.bbox);
+        const allWords = collectOcrWords(data, width, height).filter((word) => word.bbox);
+        const groupedWordLines = groupWordsIntoLines(allWords.length ? allWords : rawLineWords, width);
+
+        const lines = rawLines
+          .map((line) => {
+            const words = collectOcrWords(line, width, height);
+            const bbox = normalizeOcrBox(line.bbox || line, width, height) || unionOcrBoxes(words);
+            return {
+              text: normalizeOcrText(line.text || words.map((word) => word.text).join(" ")),
+              confidence: Number(line.confidence),
+              bbox,
+              words,
+            };
+          })
+          .filter((line) => line.text && line.bbox);
+
+        if (groupedWordLines.length >= Math.max(4, Math.round(lines.length * 0.65))) {
+          return groupedWordLines;
+        }
+
+        if (lines.length) {
+          return lines;
+        }
+
+        const words = collectOcrWords(data, width, height).filter((word) => word.bbox);
+        const grouped = groupWordsIntoLines(words, width);
+        if (grouped.length) {
+          return grouped;
+        }
+
+        return String(data.text || "")
+          .split(/\r?\n/)
+          .map((text, index) => normalizeOcrText(text))
+          .filter(Boolean)
+          .map((text, index, all) => {
+            const rowHeight = height / Math.max(1, all.length);
+            return {
+              text,
+              confidence: Number(data.confidence),
+              bbox: { x0: 0, y0: Math.round(index * rowHeight), x1: width, y1: Math.round((index + 0.8) * rowHeight) },
+              words: [],
+            };
+          });
+      }
+
+      function extractOcrPage(result, page, pageIndex, ocrCanvas) {
+        const data = result && result.data ? result.data : {};
+        return {
+          pageIndex,
+          pageName: page.displayName,
+          width: ocrCanvas.width,
+          height: ocrCanvas.height,
+          confidence: Number(data.confidence),
+          text: String(data.text || "").trim(),
+          lines: collectOcrLines(data, ocrCanvas.width, ocrCanvas.height),
+        };
+      }
+
+      function detectColumnLayout(lines, width) {
+        const sorted = [...lines].sort((a, b) => a.bbox.y0 - b.bbox.y0 || a.bbox.x0 - b.bbox.x0);
+        if (sorted.length < 6) {
+          return { type: "single", sections: [{ title: "本文", lines: sorted }] };
+        }
+
+        const buildSections = (split, minimumLines) => {
+          const full = [];
+          const left = [];
+          const right = [];
+          sorted.forEach((line) => {
+            const center = (line.bbox.x0 + line.bbox.x1) / 2;
+            const boxWidth = line.bbox.x1 - line.bbox.x0;
+            if (boxWidth > width * 0.82 && line.text.length <= 80) {
+              full.push(line);
+            } else if (center < split) {
+              left.push(line);
+            } else {
+              right.push(line);
+            }
+          });
+
+          if (left.length < minimumLines || right.length < minimumLines) {
+            return null;
+          }
+
+          const sections = [];
+          if (full.length) {
+            sections.push({ title: "全幅", lines: full });
+          }
+          sections.push({ title: "左カラム", lines: left }, { title: "右カラム", lines: right });
+          return { type: "two-column", sections };
+        };
+
+        const centers = sorted
+          .map((line) => (line.bbox.x0 + line.bbox.x1) / 2)
+          .sort((a, b) => a - b);
+        let bestGap = 0;
+        let split = width / 2;
+        for (let index = 1; index < centers.length; index += 1) {
+          const gap = centers[index] - centers[index - 1];
+          const leftCount = index;
+          const rightCount = centers.length - index;
+          if (leftCount >= 3 && rightCount >= 3 && gap > bestGap) {
+            bestGap = gap;
+            split = (centers[index] + centers[index - 1]) / 2;
+          }
+        }
+
+        if (bestGap < width * 0.16) {
+          const centerFallback = buildSections(width / 2, 6);
+          if (centerFallback) {
+            return centerFallback;
+          }
+          return { type: "single", sections: [{ title: "本文", lines: sorted }] };
+        }
+
+        return buildSections(split, 3) || buildSections(width / 2, 6) || { type: "single", sections: [{ title: "本文", lines: sorted }] };
+      }
+
+      function shouldJoinWithoutSpace(left, right) {
+        return /[\u3040-\u30ff\u3400-\u9fff]$/.test(left) || /^[\u3040-\u30ff\u3400-\u9fff]/.test(right);
+      }
+
+      function appendParagraphLine(current, text) {
+        if (!current) {
+          return text;
+        }
+        return shouldJoinWithoutSpace(current, text) ? `${current}${text}` : `${current} ${text}`;
+      }
+
+      function lineLooksLikeHeading(line, medianHeight, pageWidth) {
+        const text = line.text;
+        const height = line.bbox.y1 - line.bbox.y0;
+        const short = text.length <= 32;
+        const sentenceLike = /[。.!?！？]$/.test(text);
+        const labelLike = /^[A-Za-z0-9０-９一-龥ぁ-んァ-ン\s()（）/・:+-]+$/.test(text);
+        return short && !sentenceLike && labelLike && height > medianHeight * 1.24;
+      }
+
+      function markdownLineText(text) {
+        return text.replace(/^#+\s*/, "").replace(/\s+([。、，,.])/, "$1").trim();
+      }
+
+      function renderLayoutLines(lines, pageWidth) {
+        const sorted = [...lines].sort((a, b) => a.bbox.y0 - b.bbox.y0 || a.bbox.x0 - b.bbox.x0);
+        const medianHeight = Math.max(8, median(sorted.map((line) => line.bbox.y1 - line.bbox.y0)));
+        const output = [];
+        let paragraph = "";
+        let previous = null;
+        const flush = () => {
+          if (paragraph) {
+            output.push(paragraph);
+            paragraph = "";
+          }
+        };
+
+        sorted.forEach((line) => {
+          const text = markdownLineText(line.text);
+          if (!text) {
+            return;
+          }
+          const gap = previous ? line.bbox.y0 - previous.bbox.y1 : 0;
+          const indentShift = previous ? Math.abs(line.bbox.x0 - previous.bbox.x0) : 0;
+          const bullet = /^[•・●\-*]\s*/.test(text);
+          const heading = lineLooksLikeHeading(line, medianHeight, pageWidth);
+
+          if (heading) {
+            flush();
+            output.push(`### ${text}`);
+          } else if (bullet) {
+            flush();
+            output.push(`- ${text.replace(/^[•・●\-*]\s*/, "")}`);
+          } else {
+            if (paragraph && (gap > medianHeight * 1.55 || indentShift > pageWidth * 0.09)) {
+              flush();
+            }
+            paragraph = appendParagraphLine(paragraph, text);
+          }
+          previous = line;
+        });
+        flush();
+        return output.join("\n\n");
+      }
+
+      function recoverLayoutMarkdown(ocrPages) {
+        const pages = [];
+        const stats = { twoColumnPages: 0, lineCount: 0 };
+        ocrPages.forEach((page) => {
+          const lines = page.lines.filter((line) => line.text && line.bbox);
+          stats.lineCount += lines.length;
+          const layout = detectColumnLayout(lines, page.width);
+          if (layout.type === "two-column") {
+            stats.twoColumnPages += 1;
+          }
+          const pageParts = [`## ${page.pageIndex + 1}件目 ${page.pageName}`];
+          layout.sections.forEach((section) => {
+            const body = renderLayoutLines(section.lines, page.width);
+            if (body) {
+              pageParts.push(`### ${section.title}`, body);
+            }
+          });
+          pages.push(pageParts.join("\n\n"));
+        });
+        return {
+          markdown: ["# 復元文書", ...pages].join("\n\n").trim(),
+          stats,
+        };
+      }
+
+      function runLayoutRecovery() {
+        if (!state.ocrPages.length) {
+          setOcrStatus("先にOCRを実行してください。", true);
+          return;
+        }
+
+        setLayoutBusy(true);
+        setOcrStatus("文書構造を復元中...");
+        try {
+          const recovered = recoverLayoutMarkdown(state.ocrPages);
+          state.layoutText = recovered.markdown;
+          layoutOutputEl.value = state.layoutText;
+          setOcrStatus(`文書復元完了 · ${recovered.stats.lineCount}行 · ${recovered.stats.twoColumnPages}ページでカラム検出`);
+        } catch (error) {
+          state.layoutText = "";
+          layoutOutputEl.value = "";
+          setOcrStatus(error.message || "文書復元に失敗しました。", true);
+        } finally {
+          setLayoutBusy(false);
+        }
+      }
+
       async function runOcr() {
         if (!state.pages.length) {
           setOcrStatus("画像なし", true);
@@ -1065,8 +1477,11 @@
 
         setOcrBusy(true);
         state.ocrText = "";
+        state.ocrPages = [];
         state.ocrConfidence = null;
+        state.layoutText = "";
         ocrOutputEl.value = "";
+        layoutOutputEl.value = "";
         setOcrStatus("OCR準備中...");
 
         try {
@@ -1074,6 +1489,7 @@
           const language = ocrLangEl.value;
           const chunks = [];
           const confidences = [];
+          const ocrPages = [];
 
           for (let index = 0; index < state.pages.length; index += 1) {
             const page = state.pages[index];
@@ -1088,10 +1504,12 @@
               confidences.push(confidence);
             }
             chunks.push(formatOcrPageText(index, page, text, state.pages.length));
+            ocrPages.push(extractOcrPage(result, page, index, ocrCanvas));
           }
 
           const joined = chunks.join("\n\n").trim();
           state.ocrText = joined;
+          state.ocrPages = ocrPages;
           if (confidences.length) {
             state.ocrConfidence = confidences.reduce((sum, value) => sum + value, 0) / confidences.length;
           }
@@ -1101,8 +1519,11 @@
           );
         } catch (error) {
           state.ocrText = "";
+          state.ocrPages = [];
           state.ocrConfidence = null;
+          state.layoutText = "";
           ocrOutputEl.value = "";
+          layoutOutputEl.value = "";
           setOcrStatus(error.message || "OCRに失敗しました。", true);
         } finally {
           setOcrBusy(false);
@@ -1137,6 +1558,36 @@
         link.remove();
         window.setTimeout(() => URL.revokeObjectURL(url), 800);
         setOcrStatus("TXTを保存しました。");
+      }
+
+      async function copyLayoutText() {
+        if (!state.layoutText) {
+          return;
+        }
+
+        try {
+          await navigator.clipboard.writeText(state.layoutText);
+          setOcrStatus("Markdownをコピーしました。");
+        } catch (_error) {
+          setOcrStatus("コピーできませんでした。", true);
+        }
+      }
+
+      function downloadLayoutText() {
+        if (!state.layoutText) {
+          return;
+        }
+
+        const blob = new Blob([state.layoutText], { type: "text/markdown;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${sanitizePdfName(filenameInput.value)}.md`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 800);
+        setOcrStatus("Markdownを保存しました。");
       }
 
       function loadImage(blob) {
@@ -2470,8 +2921,11 @@
       shareButton.addEventListener("click", sharePdf);
       installButton.addEventListener("click", promptInstall);
       ocrRunButton.addEventListener("click", runOcr);
+      layoutRunButton.addEventListener("click", runLayoutRecovery);
       ocrCopyButton.addEventListener("click", copyOcrText);
       ocrDownloadButton.addEventListener("click", downloadOcrText);
+      layoutCopyButton.addEventListener("click", copyLayoutText);
+      layoutDownloadButton.addEventListener("click", downloadLayoutText);
       modeEl.addEventListener("change", reprocessPages);
 
       window.addEventListener("beforeinstallprompt", (event) => {
