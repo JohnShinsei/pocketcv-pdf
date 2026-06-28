@@ -501,9 +501,9 @@
             <span class="mode-label">処理モード</span>
             <select id="mode" class="mode" aria-label="処理モード">
               <option value="report">CVレポート</option>
-              <option value="color">補正画像</option>
-              <option value="gray">グレー</option>
-              <option value="binary">二値化</option>
+              <option value="color">カラースキャン</option>
+              <option value="gray">グレースキャン</option>
+              <option value="binary">白黒スキャン</option>
               <option value="edges">エッジ</option>
             </select>
           </label>
@@ -887,7 +887,7 @@
         return Math.abs(area) / 2;
       }
 
-      function expandQuad(points, width, height, ratio = 0.018) {
+      function expandQuad(points, width, height, ratio = 0.006) {
         const center = points.reduce((sum, point) => ({ x: sum.x + point.x / points.length, y: sum.y + point.y / points.length }), {
           x: 0,
           y: 0,
@@ -1165,6 +1165,48 @@
         return threshold;
       }
 
+      function localPercentileFromHistogram(histogram, total, percentile) {
+        if (total <= 0) {
+          return 240;
+        }
+        return percentileFromHistogram(histogram, total, percentile);
+      }
+
+      function smoothTileValues(values, gridWidth, gridHeight) {
+        const smoothed = new Float32Array(values.length);
+        for (let y = 0; y < gridHeight; y += 1) {
+          for (let x = 0; x < gridWidth; x += 1) {
+            let sum = 0;
+            let weight = 0;
+            for (let oy = -1; oy <= 1; oy += 1) {
+              for (let ox = -1; ox <= 1; ox += 1) {
+                const sx = clamp(x + ox, 0, gridWidth - 1);
+                const sy = clamp(y + oy, 0, gridHeight - 1);
+                const currentWeight = ox === 0 && oy === 0 ? 4 : 1;
+                sum += values[sy * gridWidth + sx] * currentWeight;
+                weight += currentWeight;
+              }
+            }
+            smoothed[y * gridWidth + x] = sum / Math.max(1, weight);
+          }
+        }
+        return smoothed;
+      }
+
+      function interpolatedTileValue(values, gridWidth, gridHeight, tileSize, x, y) {
+        const gx = clamp(x / tileSize - 0.5, 0, gridWidth - 1);
+        const gy = clamp(y / tileSize - 0.5, 0, gridHeight - 1);
+        const x0 = Math.floor(gx);
+        const y0 = Math.floor(gy);
+        const x1 = Math.min(gridWidth - 1, x0 + 1);
+        const y1 = Math.min(gridHeight - 1, y0 + 1);
+        const wx = gx - x0;
+        const wy = gy - y0;
+        const top = values[y0 * gridWidth + x0] * (1 - wx) + values[y0 * gridWidth + x1] * wx;
+        const bottom = values[y1 * gridWidth + x0] * (1 - wx) + values[y1 * gridWidth + x1] * wx;
+        return top * (1 - wy) + bottom * wy;
+      }
+
       function enhanceCanvas(sourceCanvas, mode, detection) {
         const renderMode = mode === "report" ? "color" : mode;
         const output = document.createElement("canvas");
@@ -1182,14 +1224,15 @@
         const data = image.data;
         const pixelCount = sourceCanvas.width * sourceCanvas.height;
         const rawLum = new Uint8ClampedArray(pixelCount);
-        const correctedLum = new Uint8ClampedArray(pixelCount);
+        const backgroundLum = new Float32Array(pixelCount);
         const normalizedLum = new Uint8ClampedArray(pixelCount);
-        const tileSize = Math.max(36, Math.round(Math.max(sourceCanvas.width, sourceCanvas.height) / 26));
+        const inkLum = new Uint8ClampedArray(pixelCount);
+        const tileSize = Math.max(54, Math.round(Math.max(sourceCanvas.width, sourceCanvas.height) / 22));
         const gridWidth = Math.ceil(sourceCanvas.width / tileSize);
         const gridHeight = Math.ceil(sourceCanvas.height / tileSize);
-        const tileSums = new Float64Array(gridWidth * gridHeight);
+        const tileHistograms = Array.from({ length: gridWidth * gridHeight }, () => new Uint32Array(256));
         const tileCounts = new Uint32Array(gridWidth * gridHeight);
-        const histogram = new Array(256).fill(0);
+        const normalizedHistogram = new Array(256).fill(0);
 
         for (let y = 0; y < sourceCanvas.height; y += 1) {
           for (let x = 0; x < sourceCanvas.width; x += 1) {
@@ -1200,38 +1243,55 @@
             const tileX = Math.floor(x / tileSize);
             const tileY = Math.floor(y / tileSize);
             const tileIndex = tileY * gridWidth + tileX;
-            tileSums[tileIndex] += Math.max(value, 115);
+            tileHistograms[tileIndex][value] += 1;
             tileCounts[tileIndex] += 1;
           }
         }
 
+        const tileBackgrounds = new Float32Array(gridWidth * gridHeight);
+        for (let index = 0; index < tileBackgrounds.length; index += 1) {
+          tileBackgrounds[index] = Math.max(150, localPercentileFromHistogram(tileHistograms[index], tileCounts[index], 0.84));
+        }
+        const smoothedBackgrounds = smoothTileValues(tileBackgrounds, gridWidth, gridHeight);
+
         for (let y = 0; y < sourceCanvas.height; y += 1) {
           for (let x = 0; x < sourceCanvas.width; x += 1) {
             const pixel = y * sourceCanvas.width + x;
-            const tileX = Math.floor(x / tileSize);
-            const tileY = Math.floor(y / tileSize);
-            const tileIndex = tileY * gridWidth + tileX;
-            const tileAverage = tileSums[tileIndex] / Math.max(1, tileCounts[tileIndex]);
-            const shadowLift = (222 - tileAverage) * 0.48;
-            const corrected = clamp(Math.round(rawLum[pixel] + shadowLift), 0, 255);
-            correctedLum[pixel] = corrected;
-            histogram[corrected] += 1;
+            const background = clamp(interpolatedTileValue(smoothedBackgrounds, gridWidth, gridHeight, tileSize, x, y), 90, 255);
+            backgroundLum[pixel] = background;
+            const normalized = clamp(Math.round((rawLum[pixel] / Math.max(1, background)) * 245), 0, 255);
+            normalizedLum[pixel] = normalized;
+            normalizedHistogram[normalized] += 1;
           }
         }
 
-        const low = percentileFromHistogram(histogram, pixelCount, 0.015);
-        const high = Math.max(low + 18, percentileFromHistogram(histogram, pixelCount, 0.988));
-        const threshold = clamp(Math.round((otsuThreshold(histogram, pixelCount) - low) * (255 / (high - low))), 110, 190);
+        const low = percentileFromHistogram(normalizedHistogram, pixelCount, 0.025);
+        const high = Math.max(low + 24, percentileFromHistogram(normalizedHistogram, pixelCount, 0.992));
+        const otsu = otsuThreshold(normalizedHistogram, pixelCount);
+        const threshold = clamp(Math.round((otsu - low) * (255 / (high - low))), 145, 210);
         let sum = 0;
         let sumSquares = 0;
         let edgeCount = 0;
 
         for (let pixel = 0; pixel < pixelCount; pixel += 1) {
-          let normalized = clamp(Math.round((correctedLum[pixel] - low) * (255 / (high - low))), 0, 255);
-          if (normalized > 215) {
-            normalized = Math.round(255 - (255 - normalized) * 0.35);
+          let normalized = clamp(Math.round((normalizedLum[pixel] - low) * (255 / (high - low))), 0, 255);
+          if (backgroundLum[pixel] < 128 && rawLum[pixel] < 96) {
+            normalizedLum[pixel] = 255;
+            inkLum[pixel] = 0;
+            continue;
           }
-          normalizedLum[pixel] = normalized;
+          const paperDelta = Math.max(0, backgroundLum[pixel] - rawLum[pixel] - 10);
+          const ink = clamp(Math.round(paperDelta * 1.7 + Math.max(0, 158 - normalized) * 0.32), 0, 255);
+          let clean = clamp(Math.round(255 - ink * 2.25), 0, 255);
+          if (normalized > 190 && ink < 20) {
+            clean = 255;
+          } else if (normalized > 205 && ink < 32) {
+            clean = Math.max(246, Math.round(255 - (255 - normalized) * 0.08));
+          } else if (clean > normalized) {
+            clean = normalized;
+          }
+          normalizedLum[pixel] = clean;
+          inkLum[pixel] = ink;
         }
 
         for (let y = 0; y < sourceCanvas.height; y += 1) {
@@ -1244,8 +1304,9 @@
             const top = normalizedLum[Math.max(0, y - 1) * sourceCanvas.width + x];
             const bottom = normalizedLum[Math.min(sourceCanvas.height - 1, y + 1) * sourceCanvas.width + x];
             const blur = (left + right + top + bottom) / 4;
-            const sharpened = clamp(Math.round(center + (center - blur) * 0.65), 0, 255);
             const gradient = Math.abs(right - left) + Math.abs(bottom - top);
+            const sharpenAmount = center < 235 || gradient > 32 ? 0.78 : 0.18;
+            const sharpened = clamp(Math.round(center + (center - blur) * sharpenAmount), 0, 255);
             if (gradient > 42) {
               edgeCount += 1;
             }
@@ -1257,24 +1318,27 @@
             sum += sharpened;
             sumSquares += sharpened * sharpened;
 
-          if (renderMode === "binary") {
-              const value = sharpened > threshold ? 255 : 0;
+            if (renderMode === "binary") {
+              const textScore = 255 - sharpened + inkLum[pixel] * 0.6 + gradient * 0.18;
+              const strongInk = inkLum[pixel] > 42 && sharpened < threshold;
+              const edgeInk = inkLum[pixel] > 30 && gradient > 38 && sharpened < threshold + 12;
+              const value = sharpened < Math.max(90, threshold - 30) || strongInk || edgeInk || textScore > 112 ? 0 : 255;
               data[index] = value;
               data[index + 1] = value;
               data[index + 2] = value;
-          } else if (renderMode === "gray") {
+            } else if (renderMode === "gray") {
               data[index] = sharpened;
               data[index + 1] = sharpened;
               data[index + 2] = sharpened;
-          } else if (renderMode === "edges") {
+            } else if (renderMode === "edges") {
               data[index] = edgeValue;
               data[index + 1] = edgeValue;
               data[index + 2] = edgeValue;
-          } else {
-              const factor = sharpened / Math.max(1, rawLum[pixel]);
-              data[index] = clamp(Math.round(data[index] * factor), 0, 255);
-              data[index + 1] = clamp(Math.round(data[index + 1] * factor), 0, 255);
-              data[index + 2] = clamp(Math.round(data[index + 2] * factor), 0, 255);
+            } else {
+              const chroma = inkLum[pixel] > 34 ? 0.18 : 0.08;
+              data[index] = clamp(Math.round(sharpened + (data[index] - rawLum[pixel]) * chroma), 0, 255);
+              data[index + 1] = clamp(Math.round(sharpened + (data[index + 1] - rawLum[pixel]) * chroma), 0, 255);
+              data[index + 2] = clamp(Math.round(sharpened + (data[index + 2] - rawLum[pixel]) * chroma), 0, 255);
             }
             data[index + 3] = 255;
           }

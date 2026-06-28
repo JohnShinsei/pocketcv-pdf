@@ -25,19 +25,30 @@ def _odd_kernel(size: int, minimum: int = 15, maximum: int = 99) -> int:
     return size + 1 if size % 2 == 0 else size
 
 
+def unsharp_mask(gray: np.ndarray, amount: float = 0.75, radius: float = 2.0) -> np.ndarray:
+    blur = cv2.GaussianBlur(gray, (0, 0), radius)
+    return cv2.addWeighted(gray, 1.0 + amount, blur, -amount, 0)
+
+
 def normalize_illumination(image: np.ndarray) -> np.ndarray:
     bgr = ensure_bgr(image)
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
     lightness, channel_a, channel_b = cv2.split(lab)
 
     h, w = lightness.shape[:2]
-    kernel = _odd_kernel(int(min(h, w) / 24), minimum=21, maximum=81)
-    background = cv2.medianBlur(cv2.dilate(lightness, np.ones((7, 7), dtype=np.uint8)), kernel)
-    corrected = 255 - cv2.absdiff(lightness, background)
-    corrected = cv2.normalize(corrected, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
+    kernel = _odd_kernel(int(min(h, w) / 10), minimum=31, maximum=181)
+    background = cv2.GaussianBlur(lightness, (kernel, kernel), 0)
+    normalized = cv2.divide(lightness, np.maximum(background, 1), scale=245)
+    normalized = cv2.medianBlur(normalized, 3)
 
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    corrected = clahe.apply(corrected)
+    clahe = cv2.createCLAHE(clipLimit=1.2, tileGridSize=(8, 8))
+    corrected = clahe.apply(normalized)
+    corrected = unsharp_mask(corrected, amount=0.55, radius=1.6)
+
+    paper_mask = corrected > 205
+    corrected = corrected.copy()
+    corrected[paper_mask] = np.maximum(corrected[paper_mask], 245)
+
     merged = cv2.merge((corrected, channel_a, channel_b))
     return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
 
@@ -45,17 +56,20 @@ def normalize_illumination(image: np.ndarray) -> np.ndarray:
 def to_clean_binary(image: np.ndarray) -> np.ndarray:
     bgr = ensure_bgr(image)
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    h, w = gray.shape[:2]
-    block_size = _odd_kernel(int(min(h, w) / 18), minimum=21, maximum=61)
-    binary = cv2.adaptiveThreshold(
-        gray,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        block_size,
-        11,
-    )
-    return cv2.morphologyEx(binary, cv2.MORPH_OPEN, np.ones((2, 2), dtype=np.uint8))
+    gray = unsharp_mask(gray, amount=0.45, radius=1.2)
+    threshold, _ = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    binary = np.where(gray < max(90, threshold - 30), 0, 255).astype(np.uint8)
+
+    foreground = 255 - binary
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, 8)
+    kept = np.zeros_like(foreground)
+    for label in range(1, count):
+        area = stats[label, cv2.CC_STAT_AREA]
+        width = stats[label, cv2.CC_STAT_WIDTH]
+        height = stats[label, cv2.CC_STAT_HEIGHT]
+        if area >= 18 or (area >= 8 and max(width, height) >= 6):
+            kept[labels == label] = 255
+    return 255 - kept
 
 
 def build_side_by_side(original: np.ndarray, processed: np.ndarray) -> np.ndarray:
