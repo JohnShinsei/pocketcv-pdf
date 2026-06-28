@@ -54,6 +54,60 @@ def image_border_detection(width: int, height: int) -> DocumentDetection:
     return DocumentDetection(corners=corners, confidence=0.1, area_ratio=1.0, method="image_border", found=False)
 
 
+def detect_bright_document_region(image: np.ndarray, max_dim: int = 900) -> DocumentDetection | None:
+    bgr = ensure_bgr(image)
+    height, width = bgr.shape[:2]
+    scale = min(1.0, max_dim / float(max(width, height)))
+    small = cv2.resize(bgr, (int(width * scale), int(height * scale)), interpolation=cv2.INTER_AREA) if scale < 1.0 else bgr
+
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    threshold = max(float(np.percentile(gray, 70)), float(gray.mean() + gray.std() * 0.1), 95.0)
+    mask = np.where(gray >= threshold, 255, 0).astype(np.uint8)
+
+    kernel_size = max(5, int(round(max(gray.shape[:2]) / 100)))
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+
+    image_area = float(width * height)
+    small_area = float(small.shape[0] * small.shape[1])
+    for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:5]:
+        contour_area = float(cv2.contourArea(contour))
+        if contour_area < small_area * 0.08:
+            continue
+
+        box = cv2.boxPoints(cv2.minAreaRect(contour)).astype(np.float32) / scale
+        box[:, 0] = np.clip(box[:, 0], 0, width - 1)
+        box[:, 1] = np.clip(box[:, 1], 0, height - 1)
+        ordered = order_points(box)
+        area_ratio = min(1.0, polygon_area(ordered) / image_area)
+
+        top_width = np.linalg.norm(ordered[1] - ordered[0])
+        bottom_width = np.linalg.norm(ordered[2] - ordered[3])
+        left_height = np.linalg.norm(ordered[3] - ordered[0])
+        right_height = np.linalg.norm(ordered[2] - ordered[1])
+        min_side = min(top_width, bottom_width, left_height, right_height)
+        if area_ratio < 0.12 or area_ratio > 0.96 or min_side < min(width, height) * 0.15:
+            continue
+
+        confidence = min(0.88, 0.28 + area_ratio * 0.55 + min(0.2, contour_area / small_area))
+        return DocumentDetection(
+            corners=np.round(ordered, 2).tolist(),
+            confidence=round(float(confidence), 3),
+            area_ratio=round(float(area_ratio), 3),
+            method="brightness_rect",
+            found=True,
+        )
+
+    return None
+
+
 def detect_document_corners(image: np.ndarray, max_dim: int = 900) -> DocumentDetection:
     bgr = ensure_bgr(image)
     height, width = bgr.shape[:2]
@@ -91,6 +145,9 @@ def detect_document_corners(image: np.ndarray, max_dim: int = 900) -> DocumentDe
             best_rect = (box, contour_area, "min_area_rect")
 
     if best_rect is None:
+        brightness_detection = detect_bright_document_region(bgr, max_dim=max_dim)
+        if brightness_detection is not None:
+            return brightness_detection
         return image_border_detection(width, height)
 
     points, contour_area, method = best_rect

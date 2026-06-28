@@ -11,7 +11,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from clearscan_cv.geometry import detect_document_corners  # noqa: E402
+from clearscan_cv.geometry import detect_bright_document_region, detect_document_corners  # noqa: E402
 from clearscan_cv.pipeline import enhance_image, process_file  # noqa: E402
 
 
@@ -24,12 +24,31 @@ def make_synthetic_document() -> np.ndarray:
     return image
 
 
+def make_low_contrast_document() -> np.ndarray:
+    image = np.full((720, 960, 3), (105, 100, 88), dtype=np.uint8)
+    document = np.array([[145, 110], [835, 150], [800, 640], [95, 610]], dtype=np.int32)
+    cv2.fillConvexPoly(image, document, (172, 172, 164))
+    for i in range(7):
+        cv2.line(image, (230, 230 + i * 42), (670, 238 + i * 42), (118, 118, 112), 3, cv2.LINE_AA)
+    image = cv2.GaussianBlur(image, (15, 15), 0)
+    return image
+
+
 class PipelineTest(unittest.TestCase):
     def test_detects_document_quad(self) -> None:
         detection = detect_document_corners(make_synthetic_document())
         self.assertTrue(detection.found)
         self.assertGreater(detection.confidence, 0.45)
         self.assertEqual(len(detection.corners), 4)
+
+    def test_brightness_fallback_detects_low_contrast_page(self) -> None:
+        detection = detect_bright_document_region(make_low_contrast_document())
+
+        self.assertIsNotNone(detection)
+        assert detection is not None
+        self.assertTrue(detection.found)
+        self.assertEqual(detection.method, "brightness_rect")
+        self.assertGreater(detection.area_ratio, 0.25)
 
     def test_enhancement_binary_output(self) -> None:
         result = enhance_image(make_synthetic_document(), mode="binary")
