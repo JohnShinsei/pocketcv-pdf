@@ -23,6 +23,10 @@
         box-sizing: border-box;
       }
 
+      [hidden] {
+        display: none !important;
+      }
+
       html,
       body {
         margin: 0;
@@ -54,8 +58,9 @@
         padding: max(22px, env(safe-area-inset-top)) 22px max(22px, env(safe-area-inset-bottom));
         border-right: 1px solid var(--line);
         background: var(--surface);
-        display: grid;
-        grid-template-rows: auto minmax(360px, 1fr) auto;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
         gap: 18px;
       }
 
@@ -64,6 +69,7 @@
         align-items: center;
         justify-content: space-between;
         gap: 12px;
+        flex: 0 0 auto;
       }
 
       .brand-copy {
@@ -118,6 +124,11 @@
         align-content: center;
         gap: 16px;
         padding: 22px;
+        flex: 0 0 auto;
+      }
+
+      .intake.has-pending {
+        align-content: start;
       }
 
       .intake-title {
@@ -138,6 +149,52 @@
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 10px;
+      }
+
+      .pending-editor {
+        display: grid;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .pending-editor[hidden] {
+        display: none;
+      }
+
+      .pending-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .pending-name {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 900;
+        line-height: 1.4;
+        word-break: break-all;
+      }
+
+      .pending-canvas {
+        width: 100%;
+        height: auto;
+        max-height: min(52vh, 560px);
+        border-radius: 8px;
+        background: #0f1217;
+        object-fit: contain;
+        touch-action: none;
+        cursor: crosshair;
+      }
+
+      .pending-tools {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      .pending-tools .primary {
+        grid-column: 1 / -1;
       }
 
       .privacy-note {
@@ -172,6 +229,7 @@
       .controls {
         display: grid;
         gap: 10px;
+        flex: 0 0 auto;
       }
 
       button,
@@ -689,16 +747,31 @@
           </label>
         </div>
 
-        <div class="intake">
-          <div>
+        <div id="intake" class="intake">
+          <div id="intake-intro">
             <h2 class="intake-title">スキャン画像を追加</h2>
             <p class="intake-copy">撮影は端末のカメラ画面を直接開きます。アルバム選択では写真ライブラリだけを開きます。</p>
           </div>
-          <div class="intake-actions">
+          <div id="intake-actions" class="intake-actions">
             <button id="start" class="primary" type="button">撮影する</button>
             <label class="file-button" for="file">アルバムから選択</label>
             <input id="camera-file" class="file" type="file" accept="image/*" capture="environment" />
             <input id="file" class="file" type="file" accept="image/*" multiple />
+          </div>
+          <div id="pending-editor" class="pending-editor" hidden>
+            <div class="pending-head">
+              <div>
+                <h2 class="intake-title">四隅を調整</h2>
+                <p class="intake-copy">原稿の四隅をドラッグしてからスキャン画像を生成します。</p>
+              </div>
+              <div id="pending-name" class="pending-name"></div>
+            </div>
+            <canvas id="pending-corner-canvas" class="pending-canvas"></canvas>
+            <div class="pending-tools">
+              <button id="pending-reset" type="button">自動角に戻す</button>
+              <button id="pending-cancel" class="danger" type="button">キャンセル</button>
+              <button id="pending-process" class="primary" type="button">この四隅で生成</button>
+            </div>
           </div>
         </div>
 
@@ -792,6 +865,8 @@
 
       const state = {
         pages: [],
+        pendingScan: null,
+        pendingQueue: [],
         pdfUrl: null,
         pdfBlob: null,
         pdfName: "",
@@ -813,6 +888,20 @@
         draggingIndex: -1,
       };
 
+      const pendingEditor = {
+        scale: 1,
+        draggingIndex: -1,
+      };
+
+      const intakeEl = document.querySelector("#intake");
+      const intakeIntro = document.querySelector("#intake-intro");
+      const intakeActions = document.querySelector("#intake-actions");
+      const pendingEditorEl = document.querySelector("#pending-editor");
+      const pendingNameEl = document.querySelector("#pending-name");
+      const pendingCanvas = document.querySelector("#pending-corner-canvas");
+      const pendingResetButton = document.querySelector("#pending-reset");
+      const pendingCancelButton = document.querySelector("#pending-cancel");
+      const pendingProcessButton = document.querySelector("#pending-process");
       const startButton = document.querySelector("#start");
       const cameraFileInput = document.querySelector("#camera-file");
       const fileInput = document.querySelector("#file");
@@ -866,13 +955,29 @@
         startButton.disabled = value;
         cameraFileInput.disabled = value;
         fileInput.disabled = value;
+        pendingResetButton.disabled = value || !state.pendingScan;
+        pendingCancelButton.disabled = value || !state.pendingScan;
+        pendingProcessButton.disabled = value || !state.pendingScan;
         clearButton.disabled = value || state.pages.length === 0;
         pdfButton.disabled = value || state.pages.length === 0;
         shareButton.disabled = value || !state.pdfBlob;
         installButton.disabled = value || !state.deferredInstallPrompt;
         cornerResetButton.disabled = value;
         cornerApplyButton.disabled = value;
+        syncPendingEditor();
         syncOcrControls();
+      }
+
+      function syncPendingEditor() {
+        const hasPending = Boolean(state.pendingScan);
+        intakeEl.classList.toggle("has-pending", hasPending);
+        intakeIntro.hidden = hasPending;
+        intakeActions.hidden = hasPending;
+        pendingEditorEl.hidden = !hasPending;
+        pendingNameEl.textContent = hasPending ? state.pendingScan.name : "";
+        pendingResetButton.disabled = state.busy || !hasPending;
+        pendingCancelButton.disabled = state.busy || !hasPending;
+        pendingProcessButton.disabled = state.busy || !hasPending;
       }
 
       function setStatus(message, isError = false) {
@@ -1067,8 +1172,8 @@
           corners.className = "mini";
           corners.type = "button";
           corners.textContent = "角調整";
-          corners.ariaLabel = `${index + 1}件目の四隅を調整`;
-          corners.addEventListener("click", () => openCornerEditor(index));
+          corners.ariaLabel = `${index + 1}件目を上の四隅調整に戻す`;
+          corners.addEventListener("click", () => editPageInIntake(index));
 
           const saveImage = document.createElement("button");
           saveImage.className = "mini";
@@ -2826,19 +2931,223 @@
         return processSourceCanvas(sourceCanvas, blob, name, manualCorners);
       }
 
-      async function addBlob(blob, name) {
+      function setupPendingCanvas() {
+        const pending = state.pendingScan;
+        if (!pending) {
+          return;
+        }
+
+        const maxWidth = Math.max(260, pendingEditorEl.clientWidth || intakeEl.clientWidth || 360);
+        const maxHeight = Math.max(260, Math.min(560, window.innerHeight * 0.52));
+        pendingEditor.scale = Math.min(1, maxWidth / pending.sourceCanvas.width, maxHeight / pending.sourceCanvas.height);
+        pendingCanvas.width = Math.max(1, Math.round(pending.sourceCanvas.width * pendingEditor.scale));
+        pendingCanvas.height = Math.max(1, Math.round(pending.sourceCanvas.height * pendingEditor.scale));
+      }
+
+      function pendingToEditorPoint(sourcePoint) {
+        return {
+          x: sourcePoint.x * pendingEditor.scale,
+          y: sourcePoint.y * pendingEditor.scale,
+        };
+      }
+
+      function pendingEventToSourcePoint(event) {
+        const pending = state.pendingScan;
+        const rect = pendingCanvas.getBoundingClientRect();
+        const canvasX = ((event.clientX - rect.left) / rect.width) * pendingCanvas.width;
+        const canvasY = ((event.clientY - rect.top) / rect.height) * pendingCanvas.height;
+        return {
+          x: clamp(canvasX / pendingEditor.scale, 0, pending.sourceCanvas.width - 1),
+          y: clamp(canvasY / pendingEditor.scale, 0, pending.sourceCanvas.height - 1),
+        };
+      }
+
+      function drawPendingEditor() {
+        const pending = state.pendingScan;
+        if (!pending || !pending.corners) {
+          return;
+        }
+
+        const context = pendingCanvas.getContext("2d");
+        context.clearRect(0, 0, pendingCanvas.width, pendingCanvas.height);
+        context.drawImage(pending.sourceCanvas, 0, 0, pendingCanvas.width, pendingCanvas.height);
+
+        const points = pending.corners.map(pendingToEditorPoint);
+        context.save();
+        context.fillStyle = "rgba(21, 127, 114, 0.16)";
+        context.strokeStyle = "#10b59f";
+        context.lineWidth = 3;
+        context.beginPath();
+        points.forEach((point, index) => {
+          if (index === 0) {
+            context.moveTo(point.x, point.y);
+          } else {
+            context.lineTo(point.x, point.y);
+          }
+        });
+        context.closePath();
+        context.fill();
+        context.stroke();
+
+        const labels = ["左上", "右上", "右下", "左下"];
+        points.forEach((point, index) => {
+          context.beginPath();
+          context.fillStyle = index === pendingEditor.draggingIndex ? "#d9892b" : "#157f72";
+          context.strokeStyle = "#ffffff";
+          context.lineWidth = 4;
+          context.arc(point.x, point.y, 14, 0, Math.PI * 2);
+          context.fill();
+          context.stroke();
+          context.font = "900 13px 'Yu Gothic', 'Noto Sans JP', Arial, sans-serif";
+          context.textAlign = "center";
+          context.textBaseline = "middle";
+          context.fillStyle = "#ffffff";
+          context.fillText(labels[index], point.x, point.y);
+        });
+        context.restore();
+      }
+
+      function nearestPendingCornerIndex(event) {
+        const pending = state.pendingScan;
+        if (!pending || !pending.corners) {
+          return -1;
+        }
+        const rect = pendingCanvas.getBoundingClientRect();
+        const canvasX = ((event.clientX - rect.left) / rect.width) * pendingCanvas.width;
+        const canvasY = ((event.clientY - rect.top) / rect.height) * pendingCanvas.height;
+        let bestIndex = -1;
+        let bestDistance = Infinity;
+        pending.corners.map(pendingToEditorPoint).forEach((point, index) => {
+          const distance = Math.hypot(point.x - canvasX, point.y - canvasY);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            bestIndex = index;
+          }
+        });
+        return bestDistance <= 72 ? bestIndex : -1;
+      }
+
+      function closestPendingCornerIndex(event) {
+        const pending = state.pendingScan;
+        const rect = pendingCanvas.getBoundingClientRect();
+        const canvasX = ((event.clientX - rect.left) / rect.width) * pendingCanvas.width;
+        const canvasY = ((event.clientY - rect.top) / rect.height) * pendingCanvas.height;
+        let bestIndex = 0;
+        let bestDistance = Infinity;
+        pending.corners.map(pendingToEditorPoint).forEach((point, index) => {
+          const distance = Math.hypot(point.x - canvasX, point.y - canvasY);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            bestIndex = index;
+          }
+        });
+        return bestIndex;
+      }
+
+      async function openPendingScan(blob, name, options = {}) {
+        setBusy(true);
+        setStatus("四隅を検出中...");
+        try {
+          const sourceCanvas = options.sourceCanvas || drawImageToCanvas(await loadImage(blob));
+          const detection = detectDocumentQuad(sourceCanvas);
+          const autoCorners = detection.found ? cloneCorners(detection.corners) : fallbackCorners(sourceCanvas);
+          state.pendingScan = {
+            blob,
+            name,
+            sourceCanvas,
+            autoCorners,
+            corners: cloneCorners(options.initialCorners || autoCorners),
+            replacePageIndex: Number.isInteger(options.replacePageIndex) ? options.replacePageIndex : -1,
+          };
+          pendingEditor.draggingIndex = -1;
+          syncPendingEditor();
+          setupPendingCanvas();
+          drawPendingEditor();
+          setBusy(false);
+          setStatus("四隅を調整してから生成してください。");
+        } catch (error) {
+          state.pendingScan = null;
+          syncPendingEditor();
+          setBusy(false);
+          setStatus(error.message || "画像を読み込めませんでした。", true);
+          await openNextPendingScan();
+        }
+      }
+
+      async function openNextPendingScan() {
+        if (state.pendingScan || state.busy || !state.pendingQueue.length) {
+          return;
+        }
+        const next = state.pendingQueue.shift();
+        await openPendingScan(next.blob, next.name);
+      }
+
+      async function queueBlobForCornerEditing(blob, name) {
+        revokePdfUrl();
+        state.pendingQueue.push({ blob, name });
+        await openNextPendingScan();
+      }
+
+      async function processPendingScan() {
+        const pending = state.pendingScan;
+        if (!pending || !pending.corners) {
+          return;
+        }
+
         revokePdfUrl();
         setBusy(true);
-        setStatus("端末内で画像処理中...");
+        setStatus("四隅からスキャンを生成中...");
         try {
-          const page = await processBlob(blob, name);
-          state.pages.push(page);
+          const page = await processSourceCanvas(pending.sourceCanvas, pending.blob, pending.name, cloneCorners(pending.corners));
+          if (pending.replacePageIndex >= 0 && state.pages[pending.replacePageIndex]) {
+            URL.revokeObjectURL(state.pages[pending.replacePageIndex].previewUrl);
+            state.pages[pending.replacePageIndex] = page;
+          } else {
+            state.pages.push(page);
+          }
+          state.pendingScan = null;
+          pendingEditor.draggingIndex = -1;
+          syncPendingEditor();
           resetOcrResult();
           refreshPages();
+          setStatus("指定した四隅でスキャンを生成しました。");
+          await openNextPendingScan();
         } catch (error) {
           setBusy(false);
-          setStatus(error.message || "画像を処理できませんでした。", true);
+          setStatus(error.message || "四隅から生成できませんでした。", true);
         }
+      }
+
+      async function cancelPendingScan() {
+        state.pendingScan = null;
+        pendingEditor.draggingIndex = -1;
+        syncPendingEditor();
+        if (state.pendingQueue.length) {
+          await openNextPendingScan();
+        } else {
+          updateStatus();
+        }
+      }
+
+      function resetPendingCorners() {
+        const pending = state.pendingScan;
+        if (!pending) {
+          return;
+        }
+        pending.corners = cloneCorners(pending.autoCorners) || fallbackCorners(pending.sourceCanvas);
+        drawPendingEditor();
+      }
+
+      async function editPageInIntake(pageIndex) {
+        const page = state.pages[pageIndex];
+        if (!page) {
+          return;
+        }
+        await openPendingScan(page.sourceBlob, page.name, {
+          sourceCanvas: page.sourceCanvas,
+          initialCorners: cloneCorners(page.manualCorners || page.autoCorners),
+          replacePageIndex: pageIndex,
+        });
       }
 
       async function reprocessPages() {
@@ -3069,16 +3378,62 @@
         drawCornerEditor();
       });
 
+      pendingResetButton.addEventListener("click", resetPendingCorners);
+      pendingCancelButton.addEventListener("click", cancelPendingScan);
+      pendingProcessButton.addEventListener("click", processPendingScan);
+
+      pendingCanvas.addEventListener("pointerdown", (event) => {
+        if (!state.pendingScan || !state.pendingScan.corners) {
+          return;
+        }
+        event.preventDefault();
+        pendingEditor.draggingIndex = nearestPendingCornerIndex(event);
+        if (pendingEditor.draggingIndex === -1) {
+          pendingEditor.draggingIndex = closestPendingCornerIndex(event);
+          state.pendingScan.corners[pendingEditor.draggingIndex] = pendingEventToSourcePoint(event);
+        }
+        pendingCanvas.setPointerCapture(event.pointerId);
+        drawPendingEditor();
+      });
+
+      pendingCanvas.addEventListener("pointermove", (event) => {
+        if (pendingEditor.draggingIndex === -1 || !state.pendingScan || !state.pendingScan.corners) {
+          return;
+        }
+        event.preventDefault();
+        state.pendingScan.corners[pendingEditor.draggingIndex] = pendingEventToSourcePoint(event);
+        drawPendingEditor();
+      });
+
+      pendingCanvas.addEventListener("pointerup", (event) => {
+        if (pendingEditor.draggingIndex !== -1) {
+          pendingCanvas.releasePointerCapture(event.pointerId);
+        }
+        pendingEditor.draggingIndex = -1;
+        drawPendingEditor();
+      });
+
+      pendingCanvas.addEventListener("pointercancel", () => {
+        pendingEditor.draggingIndex = -1;
+        drawPendingEditor();
+      });
+
       window.addEventListener("resize", () => {
         if (!cornerDialog.hidden && cornerEditor.pageIndex >= 0) {
           setupCornerCanvas(state.pages[cornerEditor.pageIndex]);
           drawCornerEditor();
+        }
+        if (state.pendingScan) {
+          setupPendingCanvas();
+          drawPendingEditor();
         }
       });
 
       window.addEventListener("keydown", (event) => {
         if (event.key === "Escape" && !cornerDialog.hidden) {
           closeCornerEditor();
+        } else if (event.key === "Escape" && state.pendingScan) {
+          cancelPendingScan();
         }
       });
 
@@ -3440,7 +3795,7 @@
         const files = Array.from(cameraFileInput.files || []);
         cameraFileInput.value = "";
         for (const file of files) {
-          await addBlob(file, file.name || `capture-${Date.now()}.jpg`);
+          await queueBlobForCornerEditing(file, file.name || `capture-${Date.now()}.jpg`);
         }
       });
 
@@ -3448,7 +3803,7 @@
         const files = Array.from(fileInput.files || []);
         fileInput.value = "";
         for (const file of files) {
-          await addBlob(file, file.name || `page-${Date.now()}.jpg`);
+          await queueBlobForCornerEditing(file, file.name || `page-${Date.now()}.jpg`);
         }
       });
 
