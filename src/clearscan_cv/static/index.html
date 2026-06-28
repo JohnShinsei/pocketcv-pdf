@@ -158,6 +158,24 @@
         padding: 11px 12px;
       }
 
+      .field-label {
+        display: grid;
+        gap: 7px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .filename-input {
+        min-height: 46px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px 12px;
+        background: #ffffff;
+        color: var(--ink);
+        font-weight: 800;
+      }
+
       .controls {
         display: grid;
         gap: 10px;
@@ -238,10 +256,22 @@
         min-width: 0;
       }
 
+      .topbar-main {
+        display: grid;
+        gap: 7px;
+        min-width: 0;
+      }
+
       .status {
         color: var(--muted);
         font-weight: 700;
         min-height: 24px;
+      }
+
+      .quality-summary {
+        color: var(--accent-dark);
+        font-size: 13px;
+        font-weight: 900;
       }
 
       .download {
@@ -285,10 +315,20 @@
         padding: 10px;
       }
 
+      .page-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
       .page-footer span {
         color: var(--muted);
         font-size: 13px;
         font-weight: 800;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .page-meta {
@@ -302,7 +342,7 @@
 
       .mini {
         min-height: 34px;
-        min-width: 48px;
+        min-width: 40px;
         padding: 0 8px;
         border-radius: 8px;
         font-size: 12px;
@@ -390,6 +430,10 @@
 
         <div class="controls">
           <div class="privacy-note">画像はアップロードされず、端末内で処理されます。</div>
+          <label class="field-label">
+            <span>PDFファイル名</span>
+            <input id="filename" class="filename-input" type="text" value="pocketcv-report" autocomplete="off" />
+          </label>
           <button id="start" type="button">カメラ起動</button>
           <button id="capture" class="capture" type="button" disabled>撮影して追加</button>
           <div class="control-row">
@@ -403,7 +447,10 @@
 
       <section class="workspace">
         <div class="topbar">
-          <div id="status" class="status">0件 - 端末内処理</div>
+          <div class="topbar-main">
+            <div id="status" class="status">0件 - 端末内処理</div>
+            <div id="quality-summary" class="quality-summary">評価待ち</div>
+          </div>
           <a id="download" class="download" hidden download="pocketcv-report.pdf">PDFを保存</a>
         </div>
         <div id="pages" class="pages">
@@ -435,7 +482,9 @@
       const pdfButton = document.querySelector("#pdf");
       const pagesEl = document.querySelector("#pages");
       const statusEl = document.querySelector("#status");
+      const qualitySummaryEl = document.querySelector("#quality-summary");
       const downloadEl = document.querySelector("#download");
+      const filenameInput = document.querySelector("#filename");
       const modeEl = document.querySelector("#mode");
 
       function clamp(value, min, max) {
@@ -459,6 +508,31 @@
       function updateStatus() {
         const count = state.pages.length;
         setStatus(`${count}件 - 端末内処理`);
+      }
+
+      function qualityLabel(score) {
+        if (score >= 82) {
+          return "良好";
+        }
+        if (score >= 65) {
+          return "確認";
+        }
+        return "再撮影推奨";
+      }
+
+      function updateQualitySummary() {
+        if (!state.pages.length) {
+          qualitySummaryEl.textContent = "評価待ち";
+          return;
+        }
+
+        const average = state.pages.reduce((sum, page) => sum + page.metrics.qualityScore, 0) / state.pages.length;
+        qualitySummaryEl.textContent = `平均品質 ${Math.round(average)} / 100 · ${qualityLabel(average)}`;
+      }
+
+      function sanitizePdfName(value) {
+        const cleaned = value.trim().replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-");
+        return cleaned || "pocketcv-report";
       }
 
       function revokePdfUrl() {
@@ -491,7 +565,38 @@
           footer.className = "page-footer";
 
           const label = document.createElement("span");
-          label.textContent = `${index + 1}件目`;
+          label.textContent = `${index + 1}件目 · ${page.displayName}`;
+
+          const actions = document.createElement("div");
+          actions.className = "page-actions";
+
+          const moveUp = document.createElement("button");
+          moveUp.className = "mini";
+          moveUp.type = "button";
+          moveUp.textContent = "上";
+          moveUp.disabled = index === 0;
+          moveUp.ariaLabel = `${index + 1}件目を上へ移動`;
+          moveUp.addEventListener("click", () => {
+            const previous = state.pages[index - 1];
+            state.pages[index - 1] = page;
+            state.pages[index] = previous;
+            revokePdfUrl();
+            refreshPages();
+          });
+
+          const moveDown = document.createElement("button");
+          moveDown.className = "mini";
+          moveDown.type = "button";
+          moveDown.textContent = "下";
+          moveDown.disabled = index === state.pages.length - 1;
+          moveDown.ariaLabel = `${index + 1}件目を下へ移動`;
+          moveDown.addEventListener("click", () => {
+            const next = state.pages[index + 1];
+            state.pages[index + 1] = page;
+            state.pages[index] = next;
+            revokePdfUrl();
+            refreshPages();
+          });
 
           const remove = document.createElement("button");
           remove.className = "mini danger";
@@ -505,11 +610,14 @@
             refreshPages();
           });
 
-          footer.append(label, remove);
+          actions.append(moveUp, moveDown, remove);
+          footer.append(label, actions);
           const meta = document.createElement("div");
           meta.className = "page-meta";
           meta.textContent = page.metrics
-            ? `透視補正 ${Math.round(page.metrics.perspectiveConfidence * 100)}% · エッジ ${
+            ? `品質 ${Math.round(page.metrics.qualityScore)} · ${qualityLabel(page.metrics.qualityScore)} · 透視補正 ${Math.round(
+                page.metrics.perspectiveConfidence * 100
+              )}% · エッジ ${
                 Math.round(page.metrics.edgeDensity * 1000) / 10
               }%`
             : "端末内で処理済み";
@@ -519,6 +627,7 @@
         });
 
         updateStatus();
+        updateQualitySummary();
         setBusy(false);
       }
 
@@ -988,13 +1097,23 @@
         edgeContext.putImageData(edgeImage, 0, 0);
         const mean = sum / Math.max(1, pixelCount);
         const contrast = Math.sqrt(Math.max(0, sumSquares / Math.max(1, pixelCount) - mean * mean));
+        const qualityScore = clamp(
+          (detection.found ? detection.confidence * 32 : 10) +
+            clamp(contrast / 95, 0, 1) * 28 +
+            clamp(edgeCount / Math.max(1, pixelCount) / 0.16, 0, 1) * 28 +
+            clamp((mean - 90) / 150, 0, 1) * 12,
+          0,
+          100
+        );
         return {
           canvas: output,
           edgeCanvas,
           metrics: {
+            qualityScore,
             perspectiveConfidence: detection.found ? detection.confidence : 0,
             edgeDensity: edgeCount / Math.max(1, pixelCount),
             contrast,
+            brightness: mean,
             threshold,
           },
         };
@@ -1042,6 +1161,7 @@
         context.fillStyle = "#17202a";
         context.fillText("評価指標", 626, 832);
         const rows = [
+          ["総合品質", `${Math.round(metrics.qualityScore)} / 100`],
           ["透視補正信頼度", `${Math.round(metrics.perspectiveConfidence * 100)}%`],
           ["エッジ密度", `${Math.round(metrics.edgeDensity * 1000) / 10}%`],
           ["コントラスト", `${Math.round(metrics.contrast * 10) / 10}`],
@@ -1050,9 +1170,9 @@
 
         context.font = "700 24px 'Yu Gothic', 'Noto Sans JP', Arial, sans-serif";
         rows.forEach((row, index) => {
-          const y = 882 + index * 72;
+          const y = 872 + index * 63;
           context.fillStyle = index % 2 === 0 ? "#f6f8fb" : "#ffffff";
-          context.fillRect(626, y - 38, 510, 56);
+          context.fillRect(626, y - 36, 510, 50);
           context.fillStyle = "#687386";
           context.fillText(row[0], 648, y);
           context.fillStyle = "#157f72";
@@ -1080,6 +1200,7 @@
         return {
           sourceBlob: blob,
           name,
+          displayName: name.replace(/\.[^.]+$/, "").slice(0, 28),
           canvas: processedCanvas,
           metrics: enhanced.metrics,
           previewUrl: URL.createObjectURL(processedBlob),
@@ -1286,6 +1407,7 @@
 
           state.pdfUrl = URL.createObjectURL(blob);
           downloadEl.href = state.pdfUrl;
+          downloadEl.download = `${sanitizePdfName(filenameInput.value)}.pdf`;
           downloadEl.hidden = false;
           downloadEl.click();
           setBusy(false);
