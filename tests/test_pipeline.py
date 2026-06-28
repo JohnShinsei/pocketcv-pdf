@@ -163,6 +163,8 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("buildIntegralImage", html)
         self.assertIn("localStatsFromIntegrals", html)
         self.assertIn("formBinaryMode", html)
+        self.assertIn("autoConfidence", html)
+        self.assertIn("autoFound", html)
         self.assertIn("件目を上へ移動", html)
         self.assertIn("端末内でPDFを生成中", html)
         self.assertIn("PocketCV 画像処理レポート", html)
