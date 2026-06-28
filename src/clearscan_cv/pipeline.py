@@ -30,6 +30,18 @@ def unsharp_mask(gray: np.ndarray, amount: float = 0.75, radius: float = 2.0) ->
     return cv2.addWeighted(gray, 1.0 + amount, blur, -amount, 0)
 
 
+def estimate_luminance_background(gray: np.ndarray) -> np.ndarray:
+    h, w = gray.shape[:2]
+    kernel = _odd_kernel(int(min(h, w) / 7), minimum=61, maximum=401)
+    return cv2.GaussianBlur(gray, (kernel, kernel), 0)
+
+
+def normalize_shadow_luminance(gray: np.ndarray, scale: float = 252.0) -> np.ndarray:
+    background = estimate_luminance_background(gray)
+    normalized = cv2.divide(gray, np.maximum(background, 1), scale=scale)
+    return np.clip(normalized, 0, 255).astype(np.uint8)
+
+
 def estimate_textline_skew(image: np.ndarray, max_angle: float = 6.0, step: float = 0.5) -> tuple[float, float]:
     bgr = ensure_bgr(image)
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
@@ -111,19 +123,16 @@ def normalize_illumination(image: np.ndarray) -> np.ndarray:
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
     lightness, channel_a, channel_b = cv2.split(lab)
 
-    h, w = lightness.shape[:2]
-    kernel = _odd_kernel(int(min(h, w) / 10), minimum=31, maximum=181)
-    background = cv2.GaussianBlur(lightness, (kernel, kernel), 0)
-    normalized = cv2.divide(lightness, np.maximum(background, 1), scale=245)
+    normalized = normalize_shadow_luminance(lightness, scale=252)
     normalized = cv2.medianBlur(normalized, 3)
 
-    clahe = cv2.createCLAHE(clipLimit=1.2, tileGridSize=(8, 8))
+    clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(8, 8))
     corrected = clahe.apply(normalized)
     corrected = unsharp_mask(corrected, amount=0.55, radius=1.6)
 
-    paper_mask = corrected > 205
+    paper_mask = corrected > 218
     corrected = corrected.copy()
-    corrected[paper_mask] = np.maximum(corrected[paper_mask], 245)
+    corrected[paper_mask] = np.maximum(corrected[paper_mask], 248)
 
     merged = cv2.merge((corrected, channel_a, channel_b))
     return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
@@ -132,18 +141,29 @@ def normalize_illumination(image: np.ndarray) -> np.ndarray:
 def to_clean_binary(image: np.ndarray) -> np.ndarray:
     bgr = ensure_bgr(image)
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    gray = unsharp_mask(gray, amount=0.25, radius=1.0)
+    normalized = normalize_shadow_luminance(gray, scale=255)
+    clahe = cv2.createCLAHE(clipLimit=0.9, tileGridSize=(8, 8))
+    gray = unsharp_mask(clahe.apply(normalized), amount=0.28, radius=1.0)
 
     h, w = gray.shape[:2]
-    block_size = _odd_kernel(int(min(h, w) / 18), minimum=31, maximum=81)
-    binary = cv2.adaptiveThreshold(
-        gray,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        block_size,
-        15,
-    )
+    block_size = _odd_kernel(int(min(h, w) / 22), minimum=41, maximum=151)
+    gray_float = gray.astype(np.float32)
+    local_mean = cv2.boxFilter(gray_float, cv2.CV_32F, (block_size, block_size), normalize=True)
+    local_sq_mean = cv2.boxFilter(gray_float * gray_float, cv2.CV_32F, (block_size, block_size), normalize=True)
+    local_std = np.sqrt(np.maximum(0.0, local_sq_mean - local_mean * local_mean))
+    sobel_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    sobel_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    gradient = np.abs(sobel_x) + np.abs(sobel_y)
+    otsu_threshold, _ = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    ink_delta = local_mean - gray_float
+
+    local_ink = (ink_delta > np.maximum(14.0, local_std * 0.42 + 6.0)) & (gray_float < 222) & (gradient > 8)
+    text_body = (gray_float < min(float(otsu_threshold) - 6.0, 168.0)) & (ink_delta > 7)
+    text_edge = (ink_delta > 10) & (gradient > 34) & (gray_float < 214)
+    deep_ink = gray_float < 74
+    paper_texture = (gray_float > 190) & (ink_delta < 30) & (gradient < 32)
+    foreground_mask = (local_ink | text_body | text_edge | deep_ink) & ~paper_texture
+    binary = np.where(foreground_mask, 0, 255).astype(np.uint8)
 
     foreground = 255 - binary
     count, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, 8)
@@ -158,8 +178,16 @@ def to_clean_binary(image: np.ndarray) -> np.ndarray:
             or stats[label, cv2.CC_STAT_LEFT] + width >= foreground.shape[1] - 2
             or stats[label, cv2.CC_STAT_TOP] + height >= foreground.shape[0] - 2
         )
-        is_edge_stain = touches_edge and area > foreground.size * 0.004 and min(width, height) > 12
-        if not is_edge_stain and (area >= 10 or (area >= 5 and max(width, height) >= 5)):
+        density = area / max(1, width * height)
+        aspect = max(width, height) / max(1, min(width, height))
+        is_edge_stain = touches_edge and area > max(160, foreground.size * 0.0006) and (
+            (width > foreground.shape[1] * 0.12 and height > 8) or (height > foreground.shape[0] * 0.12 and width > 8)
+        )
+        is_large_blob = area > foreground.size * 0.014 and min(width, height) > 16
+        is_tiny_dust = area <= 4 or (area <= 12 and width <= 6 and height <= 6)
+        is_sparse_texture = area < 30 and density < 0.16 and max(width, height) < 22
+        is_small_text = area >= 5 and (aspect >= 2.0 or max(width, height) >= 8)
+        if not (is_edge_stain or is_large_blob or is_tiny_dust or is_sparse_texture) and (area >= 14 or is_small_text):
             kept[labels == label] = 255
     return 255 - kept
 

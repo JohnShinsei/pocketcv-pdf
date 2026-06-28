@@ -66,6 +66,26 @@ def make_skewed_text_page(angle: float = 3.0) -> np.ndarray:
     return cv2.warpAffine(image, matrix, (image.shape[1], image.shape[0]), borderValue=(255, 255, 255))
 
 
+def make_shadowed_noisy_page() -> np.ndarray:
+    rng = np.random.default_rng(7)
+    height, width = 720, 920
+    x_gradient = np.linspace(0, 45, width, dtype=np.float32)
+    y_gradient = np.linspace(0, 24, height, dtype=np.float32)[:, None]
+    paper = 235 - x_gradient - y_gradient
+    shadow = np.zeros((height, width), dtype=np.float32)
+    cv2.ellipse(shadow, (width - 180, 180), (260, 210), -12, 0, 360, 46, -1, cv2.LINE_AA)
+    gray = np.clip(paper - cv2.GaussianBlur(shadow, (151, 151), 0), 0, 255).astype(np.uint8)
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    for i in range(10):
+        y = 110 + i * 38
+        cv2.line(image, (110, y), (770, y + (i % 2)), (38, 38, 38), 2, cv2.LINE_AA)
+        cv2.putText(image, f"TEXT {i + 1:02d}", (120, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (45, 45, 45), 1, cv2.LINE_AA)
+    speckles = rng.choice(height * width, size=900, replace=False)
+    flat = image.reshape(-1, 3)
+    flat[speckles] = np.maximum(0, flat[speckles].astype(np.int16) - rng.integers(18, 45, size=(speckles.size, 1))).astype(np.uint8)
+    return image
+
+
 class PipelineTest(unittest.TestCase):
     def test_detects_document_quad(self) -> None:
         detection = detect_document_corners(make_synthetic_document())
@@ -120,6 +140,17 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(report["angle"], angle)
         self.assertLess(abs(corrected_angle), 1.0)
 
+    def test_binary_enhancement_suppresses_shadow_noise(self) -> None:
+        result = enhance_image(make_shadowed_noisy_page(), mode="binary", auto_warp=False)
+        binary = result.image
+        blank_region = binary[460:650, 110:810]
+        text_region = binary[90:500, 100:790]
+
+        self.assertGreater(float(np.mean(blank_region > 245)), 0.965)
+        self.assertGreater(float(np.mean(text_region < 128)), 0.012)
+        self.assertLess(float(np.mean(binary < 128)), 0.075)
+        self.assertIn("textline_deskew", result.report["pipeline"])
+
     def test_process_file_writes_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -151,6 +182,13 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("warpPerspectiveCanvas", html)
         self.assertIn("edgeCanvas", html)
         self.assertIn("qualityScore", html)
+        self.assertIn("MAX_SOURCE_IMAGE_EDGE = 3200", html)
+        self.assertIn("MAX_SOURCE_IMAGE_PIXELS = 6500000", html)
+        self.assertIn("PDF_MAX_IMAGE_EDGE = 3200", html)
+        self.assertIn("PDF_MAX_IMAGE_PIXELS = 6500000", html)
+        self.assertNotIn("MAX_IMAGE_DIMENSION", html)
+        self.assertIn("formatResolution", html)
+        self.assertIn("sourceOriginalWidth", html)
         self.assertIn("平均品質", html)
         self.assertIn("PDFファイル名", html)
         self.assertIn("スキャンPDFを生成", html)
@@ -188,6 +226,8 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("formBinaryMode", html)
         self.assertIn("autoConfidence", html)
         self.assertIn("autoFound", html)
+        self.assertIn("paperNoiseGuard", html)
+        self.assertIn("strokeContrast", html)
         self.assertIn("workspaceEl.classList.toggle(\"has-ocr\"", html)
         self.assertIn("grid-template-columns: minmax(520px, 1fr) minmax(360px, 440px)", html)
         self.assertIn("deskewCanvasByTextLines", html)
@@ -201,6 +241,10 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("CompressionStream", html)
         self.assertIn("/FlateDecode", html)
         self.assertIn("/Info", html)
+        self.assertIn("navigator.canShare && navigator.canShare(shareData)", html)
+        self.assertIn('new File([pdfBlob], filename, { type: "application/pdf" })', html)
+        self.assertIn("PDFファイル共有に非対応", html)
+        self.assertNotIn('text: "PocketCV PDFで生成したスキャンPDF"', html)
         self.assertIn('id="camera-file"', html)
         self.assertIn('capture="environment"', html)
         self.assertIn('<input id="file" class="file" type="file" accept="image/*" multiple />', html)
@@ -221,6 +265,7 @@ class PipelineTest(unittest.TestCase):
         worker = (ROOT / "src" / "clearscan_cv" / "static" / "sw.js").read_text(encoding="utf-8")
 
         self.assertIn("CACHE_NAME", worker)
+        self.assertIn("pocketcv-pdf-v5", worker)
         self.assertIn("install", worker)
         self.assertIn("fetch", worker)
         self.assertIn("event.request.mode === \"navigate\"", worker)

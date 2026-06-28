@@ -23,19 +23,35 @@ PocketCV PDF は、スマートフォンや PC ブラウザで完結する文書
 - Feng et al., "Geometric Representation Learning for Document Image Rectification", ECCV 2022: textlines を局所的な幾何制約として扱う。
 - Verhoeven et al., "UVDoc: Neural Grid-based Document Unwarping", SIGGRAPH Asia 2023: unwarping 評価で line straightness を重視する。
 
+### 局所背景推定と stroke-aware 二値化
+
+透視補正と deskew の後に、紙面の大域的な明るさではなく局所背景を推定して正規化し、文字候補は「背景との差分」「局所コントラスト」「エッジ勾配」「濃いインク」の複数条件で判定します。これにより、影や紙のしわ・テクスチャを黒いノイズとして拾いにくくします。
+
+実装箇所:
+
+- `src/clearscan_cv/pipeline.py`: `estimate_luminance_background`, `normalize_shadow_luminance`, `to_clean_binary`
+- `src/clearscan_cv/static/index.html`: tile background 推定、`paperNoiseGuard`, `strokeContrast`
+- テスト: 影付き・紙纹ノイズ付きの合成ページで、空白領域を白く保ちつつ文字領域を残すことを確認
+
+参照した考え方:
+
+- Anvari and Athitsos, "A Survey on Deep learning based Document Image Enhancement", 2021: 文書增强を二値化、去影、去ノイズ、文字可読性改善などの複合問題として整理。
+- Li et al., "Document Rectification and Illumination Correction using a Patch-based CNN", 2019: 幾何補正と光照補正を分離し、局所領域で補正する設計。
+- Feng et al., "DocTr", 2021: 幾何 unwarping と illumination correction を連結し、OCR 入力品質を上げる設計。
+
 ## 論文別メモ
 
 | 領域 | 論文 | このプロジェクトでの扱い |
 | --- | --- | --- |
 | 総論 | Liang, Doermann, Li, "Camera-based analysis of text and documents: a survey", IJDAR 2005 | カメラ文書特有の透視歪み、低解像度、ぼけ、背景混入を前提問題として整理。 |
-| 画像強調 | Anvari and Athitsos, "A Survey on Deep learning based Document Image Enhancement", arXiv 2021 | 二値化、去ぼけ、ノイズ除去、影除去などの分類を参考に、現在は軽量な背景推定・局所二値化を実装。 |
+| 画像強調 | Anvari and Athitsos, "A Survey on Deep learning based Document Image Enhancement", arXiv 2021 | 二値化、去ぼけ、ノイズ除去、影除去などの分類を参考に、局所背景推定と stroke-aware 二値化を実装。 |
 | 文書解析 | Zhang et al., "Document Parsing Unveiled", arXiv 2024 | OCR 後の Markdown 復元、段組み推定、将来の JSON/Word 出力のロードマップに反映。 |
 | 透視補正 | Jagannathan and Jawahar, "Perspective Correction Methods for Camera-Based Document Analysis", CBDAR 2005 | Canny/contour に加え、文字行 deskew を追加。 |
 | モバイル透視補正 | Yin et al., "A Multi-Stage Strategy to Perspective Rectification for Mobile Phone Camera-Based Document Images", ICDAR 2007 | 境界検出、text baseline、block alignment を段階的に使う思想を、端末内の軽量 deskew として採用。 |
 | 深度 dewarp | Ma et al., "DocUNet", CVPR 2018 | 将来の曲面補正候補。現版ではモデルを同梱せず、四点透視補正と小角度 deskew に留める。 |
 | 3D dewarp | Das et al., "DewarpNet", ICCV 2019 | 3D shape ベースの dewarp は将来の別モデル候補。端末内版では未実装。 |
-| patch flow + 光照 | Li et al., "Document Rectification and Illumination Correction using a Patch-based CNN", SIGGRAPH Asia 2019 | 幾何補正と照明補正を分ける設計を参考に、現版でも透視/deskew の後に去陰影処理を実行。 |
-| Transformer | Feng et al., "DocTr", ACM MM 2021 | 幾何補正と光照補正を両方扱う構成を参考に、現版では軽量版として Canvas 処理に分解。 |
+| patch flow + 光照 | Li et al., "Document Rectification and Illumination Correction using a Patch-based CNN", SIGGRAPH Asia 2019 | 幾何補正と照明補正を分ける設計を参考に、透視/deskew の後に局所背景正規化を実行。 |
+| Transformer | Feng et al., "DocTr", ACM MM 2021 | 幾何補正と光照補正を両方扱う構成を参考に、現版では軽量版として Canvas の去影・文字強調処理に分解。 |
 | progressive | Feng et al., "DocScanner", arXiv 2021 / IJCV 2025 | 反復的に rectified image を改善する方向は、将来の複数段補正候補。 |
 | textline geometry | Feng et al., "DocGeoNet", ECCV 2022 | textline を幾何制約として扱う考えを、今回の文字行 deskew に反映。 |
 | grid unwarping | Verhoeven et al., "UVDoc", SIGGRAPH Asia 2023 | line straightness 評価を参考に、角度補正を品質指標として表示。 |

@@ -780,12 +780,13 @@
     </div>
 
     <script>
-      const MAX_IMAGE_DIMENSION = 1800;
+      const MAX_SOURCE_IMAGE_EDGE = 3200;
+      const MAX_SOURCE_IMAGE_PIXELS = 6500000;
       const A4_WIDTH = 595.28;
       const A4_HEIGHT = 841.89;
       const PAGE_MARGIN = 24;
-      const PDF_MAX_IMAGE_EDGE = 2200;
-      const PDF_MAX_IMAGE_PIXELS = 2600000;
+      const PDF_MAX_IMAGE_EDGE = 3200;
+      const PDF_MAX_IMAGE_PIXELS = 6500000;
       const TESSERACT_SCRIPT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
       let tesseractLoadPromise = null;
 
@@ -949,6 +950,18 @@
         return `傾き ${Math.round(angle * 10) / 10}°`;
       }
 
+      function formatResolution(page) {
+        const current = `${page.sourceCanvas.width}×${page.sourceCanvas.height}`;
+        if (
+          Number.isFinite(page.sourceOriginalWidth) &&
+          Number.isFinite(page.sourceOriginalHeight) &&
+          (page.sourceOriginalWidth !== page.sourceCanvas.width || page.sourceOriginalHeight !== page.sourceCanvas.height)
+        ) {
+          return `解像度 元 ${page.sourceOriginalWidth}×${page.sourceOriginalHeight} → ${current}`;
+        }
+        return `解像度 ${current}`;
+      }
+
       function cloneCorners(corners) {
         return corners ? corners.map((point) => ({ x: point.x, y: point.y })) : null;
       }
@@ -1075,7 +1088,7 @@
                 page.metrics.perspectiveConfidence * 100
               )}% · エッジ ${
                 Math.round(page.metrics.edgeDensity * 1000) / 10
-              }% · ${formatSkewAngle(page.metrics.deskewAngle)}`
+              }% · ${formatSkewAngle(page.metrics.deskewAngle)} · ${formatResolution(page)}`
             : "端末内で処理済み";
 
           item.append(image, footer, meta);
@@ -1686,11 +1699,18 @@
       function drawImageToCanvas(image) {
         const width = image.width || image.naturalWidth;
         const height = image.height || image.naturalHeight;
-        const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(width, height));
+        const edgeScale = MAX_SOURCE_IMAGE_EDGE / Math.max(width, height);
+        const pixelScale = Math.sqrt(MAX_SOURCE_IMAGE_PIXELS / Math.max(1, width * height));
+        const scale = Math.min(1, edgeScale, pixelScale);
         const output = document.createElement("canvas");
         output.width = Math.max(1, Math.round(width * scale));
         output.height = Math.max(1, Math.round(height * scale));
-        output.getContext("2d").drawImage(image, 0, 0, output.width, output.height);
+        output.dataset.originalWidth = String(width);
+        output.dataset.originalHeight = String(height);
+        const context = output.getContext("2d");
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
+        context.drawImage(image, 0, 0, output.width, output.height);
         return output;
       }
 
@@ -2094,7 +2114,9 @@
           80,
           Math.round(Math.max(pointDistance(orderedCorners[0], orderedCorners[3]), pointDistance(orderedCorners[1], orderedCorners[2])))
         );
-        const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(targetWidth, targetHeight));
+        const edgeScale = MAX_SOURCE_IMAGE_EDGE / Math.max(targetWidth, targetHeight);
+        const pixelScale = Math.sqrt(MAX_SOURCE_IMAGE_PIXELS / Math.max(1, targetWidth * targetHeight));
+        const scale = Math.min(1, edgeScale, pixelScale);
         const width = Math.max(1, Math.round(targetWidth * scale));
         const height = Math.max(1, Math.round(targetHeight * scale));
         const scaledCorners = orderedCorners.map((point) => ({ x: point.x, y: point.y }));
@@ -2521,7 +2543,7 @@
 
         const tileBackgrounds = new Float32Array(gridWidth * gridHeight);
         for (let index = 0; index < tileBackgrounds.length; index += 1) {
-          tileBackgrounds[index] = Math.max(120, localPercentileFromHistogram(tileHistograms[index], tileCounts[index], 0.76));
+          tileBackgrounds[index] = Math.max(128, localPercentileFromHistogram(tileHistograms[index], tileCounts[index], 0.82));
         }
         const smoothedBackgrounds = smoothTileValues(tileBackgrounds, gridWidth, gridHeight);
 
@@ -2536,8 +2558,8 @@
           }
         }
 
-        const low = percentileFromHistogram(normalizedHistogram, pixelCount, 0.025);
-        const high = Math.max(low + 24, percentileFromHistogram(normalizedHistogram, pixelCount, 0.992));
+        const low = percentileFromHistogram(normalizedHistogram, pixelCount, 0.035);
+        const high = Math.max(low + 24, percentileFromHistogram(normalizedHistogram, pixelCount, 0.995));
         const otsu = otsuThreshold(normalizedHistogram, pixelCount);
         const threshold = clamp(Math.round((otsu - low) * (255 / (high - low))), 145, 210);
         let sum = 0;
@@ -2553,12 +2575,12 @@
             continue;
           }
           illuminationLum[pixel] = normalized;
-          const darkness = Math.max(0, 250 - normalized);
-          const ink = clamp(Math.round(Math.max(0, darkness - 24) * 2.15), 0, 255);
-          let clean = clamp(Math.round(255 - ink * 1.02), 0, 255);
-          if (normalized > 214 || ink < 18) {
+          const darkness = Math.max(0, 248 - normalized);
+          const ink = clamp(Math.round(Math.max(0, darkness - 28) * 2), 0, 255);
+          let clean = clamp(Math.round(255 - ink), 0, 255);
+          if (normalized > 220 || ink < 22) {
             clean = 255;
-          } else if (normalized > 190 && ink < 45) {
+          } else if (normalized > 194 && ink < 52) {
             clean = Math.max(246, Math.round(255 - (255 - normalized) * 0.05));
           } else if (clean > normalized) {
             clean = normalized;
@@ -2642,10 +2664,13 @@
                 y,
                 adaptiveRadius
               );
-              const localInk = sharpened < localMean - 13 && inkLum[pixel] > 10 && sharpened < 230;
-              const textBody = inkLum[pixel] > 118 && normalizedGradient > 8 && sharpened < 142;
-              const textEdge = inkLum[pixel] > 42 && normalizedGradient > 36 && sharpened < 218;
-              const deepInk = normCenter < 54 && inkLum[pixel] > 104 && normalizedGradient > 18;
+              const strokeContrast = localMean - sharpened;
+              const paperNoiseGuard = sharpened > 190 && inkLum[pixel] < 62 && normalizedGradient < 34 && strokeContrast < 32;
+              const localInk =
+                !paperNoiseGuard && strokeContrast > 17 && inkLum[pixel] > 20 && sharpened < 222 && normalizedGradient > 8;
+              const textBody = inkLum[pixel] > 128 && strokeContrast > 24 && sharpened < 154;
+              const textEdge = inkLum[pixel] > 50 && normalizedGradient > 42 && strokeContrast > 8 && sharpened < 208;
+              const deepInk = normCenter < 58 && inkLum[pixel] > 100 && normalizedGradient > 16;
               const value = localInk || textBody || textEdge || deepInk ? 0 : 255;
               data[index] = value;
               data[index + 1] = value;
@@ -2784,6 +2809,8 @@
           sourceCanvas,
           name,
           displayName: name.replace(/\.[^.]+$/, "").slice(0, 28),
+          sourceOriginalWidth: Number(sourceCanvas.dataset.originalWidth || sourceCanvas.width),
+          sourceOriginalHeight: Number(sourceCanvas.dataset.originalHeight || sourceCanvas.height),
           canvas: processedCanvas,
           pdfMode: renderMode,
           metrics: enhanced.metrics,
@@ -3276,7 +3303,7 @@
 
       async function generatePdf() {
         if (!state.pages.length) {
-          return;
+          return null;
         }
 
         revokePdfUrl();
@@ -3300,31 +3327,37 @@
           downloadEl.click();
           setBusy(false);
           setStatus(`PDF生成完了 - ${state.pages.length}件 / ${formatFileSize(blob.size)}`);
+          return blob;
         } catch (error) {
           setBusy(false);
           setStatus(error.message || "PDF生成に失敗しました。", true);
+          return null;
         }
       }
 
       async function sharePdf() {
-        if (!state.pdfBlob) {
-          setStatus("共有するPDFがありません。", true);
-          return;
+        let pdfBlob = state.pdfBlob;
+        if (!pdfBlob) {
+          pdfBlob = await generatePdf();
         }
 
         const filename = state.pdfName || `${sanitizePdfName(filenameInput.value)}.pdf`;
+        if (!pdfBlob) {
+          setStatus("共有するPDFを生成できませんでした。", true);
+          return;
+        }
+
         if ("share" in navigator && typeof File !== "undefined") {
-          const pdfFile = new File([state.pdfBlob], filename, { type: "application/pdf" });
+          const pdfFile = new File([pdfBlob], filename, { type: "application/pdf" });
           const shareData = {
             files: [pdfFile],
             title: "PocketCV PDF",
-            text: "PocketCV PDFで生成したスキャンPDF",
           };
 
-          if (!navigator.canShare || navigator.canShare(shareData)) {
+          if (navigator.canShare && navigator.canShare(shareData)) {
             try {
               await navigator.share(shareData);
-              setStatus("PDF共有を開始しました。");
+              setStatus(`PDFファイルを共有しました - ${formatFileSize(pdfBlob.size)}`);
               return;
             } catch (error) {
               if (error && error.name === "AbortError") {
@@ -3336,7 +3369,7 @@
         }
 
         downloadEl.click();
-        setStatus("このブラウザはPDF共有に非対応です。PDFを保存してください。");
+        setStatus("このブラウザはPDFファイル共有に非対応です。PDFを保存しました。");
       }
 
       async function registerServiceWorker() {
