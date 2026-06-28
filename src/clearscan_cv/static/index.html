@@ -2680,12 +2680,12 @@
             continue;
           }
           illuminationLum[pixel] = normalized;
-          const darkness = Math.max(0, 248 - normalized);
-          const ink = clamp(Math.round(Math.max(0, darkness - 28) * 2), 0, 255);
-          let clean = clamp(Math.round(255 - ink), 0, 255);
-          if (normalized > 220 || ink < 22) {
+          const darkness = Math.max(0, 246 - normalized);
+          const ink = clamp(Math.round(Math.max(0, darkness - 34) * 1.55), 0, 255);
+          let clean = clamp(Math.round(255 - ink * 0.94), 0, 255);
+          if (normalized > 216 || ink < 26) {
             clean = 255;
-          } else if (normalized > 194 && ink < 52) {
+          } else if (normalized > 184 && ink < 64) {
             clean = Math.max(246, Math.round(255 - (255 - normalized) * 0.05));
           } else if (clean > normalized) {
             clean = normalized;
@@ -2770,12 +2770,12 @@
                 adaptiveRadius
               );
               const strokeContrast = localMean - sharpened;
-              const paperNoiseGuard = sharpened > 190 && inkLum[pixel] < 62 && normalizedGradient < 34 && strokeContrast < 32;
+              const paperNoiseGuard = sharpened > 176 && inkLum[pixel] < 84 && normalizedGradient < 42 && strokeContrast < 42;
               const localInk =
-                !paperNoiseGuard && strokeContrast > 17 && inkLum[pixel] > 20 && sharpened < 222 && normalizedGradient > 8;
-              const textBody = inkLum[pixel] > 128 && strokeContrast > 24 && sharpened < 154;
-              const textEdge = inkLum[pixel] > 50 && normalizedGradient > 42 && strokeContrast > 8 && sharpened < 208;
-              const deepInk = normCenter < 58 && inkLum[pixel] > 100 && normalizedGradient > 16;
+                !paperNoiseGuard && strokeContrast > 31 && inkLum[pixel] > 48 && sharpened < 194 && normalizedGradient > 15;
+              const textBody = inkLum[pixel] > 162 && strokeContrast > 34 && sharpened < 134;
+              const textEdge = inkLum[pixel] > 92 && normalizedGradient > 64 && strokeContrast > 18 && sharpened < 178;
+              const deepInk = normCenter < 48 && inkLum[pixel] > 120 && normalizedGradient > 20;
               const value = localInk || textBody || textEdge || deepInk ? 0 : 255;
               data[index] = value;
               data[index + 1] = value;

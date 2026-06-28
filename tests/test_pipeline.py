@@ -86,6 +86,15 @@ def make_shadowed_noisy_page() -> np.ndarray:
     return image
 
 
+def make_soft_antialiased_text_page() -> np.ndarray:
+    image = np.full((520, 760, 3), 246, dtype=np.uint8)
+    for index in range(9):
+        y = 80 + index * 45
+        cv2.putText(image, f"Sample text line {index + 1}", (70, y), cv2.FONT_HERSHEY_SIMPLEX, 0.82, (92, 92, 92), 2, cv2.LINE_AA)
+        cv2.line(image, (70, y + 15), (620, y + 17), (130, 130, 130), 1, cv2.LINE_AA)
+    return cv2.GaussianBlur(image, (3, 3), 0)
+
+
 class PipelineTest(unittest.TestCase):
     def test_detects_document_quad(self) -> None:
         detection = detect_document_corners(make_synthetic_document())
@@ -150,6 +159,13 @@ class PipelineTest(unittest.TestCase):
         self.assertGreater(float(np.mean(text_region < 128)), 0.012)
         self.assertLess(float(np.mean(binary < 128)), 0.075)
         self.assertIn("textline_deskew", result.report["pipeline"])
+
+    def test_binary_enhancement_keeps_antialias_text_from_becoming_bold(self) -> None:
+        result = enhance_image(make_soft_antialiased_text_page(), mode="binary", auto_warp=False)
+        black_ratio = float(np.mean(result.image < 128))
+
+        self.assertGreater(black_ratio, 0.01)
+        self.assertLess(black_ratio, 0.055)
 
     def test_process_file_writes_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -236,6 +252,8 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("autoFound", html)
         self.assertIn("paperNoiseGuard", html)
         self.assertIn("strokeContrast", html)
+        self.assertIn("textEdge = inkLum[pixel] > 92", html)
+        self.assertIn("strokeContrast > 31", html)
         self.assertIn("workspaceEl.classList.toggle(\"has-ocr\"", html)
         self.assertIn("grid-template-columns: minmax(520px, 1fr) minmax(360px, 440px)", html)
         self.assertIn("deskewCanvasByTextLines", html)
@@ -273,7 +291,7 @@ class PipelineTest(unittest.TestCase):
         worker = (ROOT / "src" / "clearscan_cv" / "static" / "sw.js").read_text(encoding="utf-8")
 
         self.assertIn("CACHE_NAME", worker)
-        self.assertIn("pocketcv-pdf-v6", worker)
+        self.assertIn("pocketcv-pdf-v7", worker)
         self.assertIn("install", worker)
         self.assertIn("fetch", worker)
         self.assertIn("event.request.mode === \"navigate\"", worker)

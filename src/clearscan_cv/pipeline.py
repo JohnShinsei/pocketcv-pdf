@@ -143,7 +143,7 @@ def to_clean_binary(image: np.ndarray) -> np.ndarray:
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     normalized = normalize_shadow_luminance(gray, scale=255)
     clahe = cv2.createCLAHE(clipLimit=0.9, tileGridSize=(8, 8))
-    gray = unsharp_mask(clahe.apply(normalized), amount=0.28, radius=1.0)
+    gray = unsharp_mask(clahe.apply(normalized), amount=0.18, radius=1.0)
 
     h, w = gray.shape[:2]
     block_size = _odd_kernel(int(min(h, w) / 22), minimum=41, maximum=151)
@@ -157,11 +157,11 @@ def to_clean_binary(image: np.ndarray) -> np.ndarray:
     otsu_threshold, _ = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     ink_delta = local_mean - gray_float
 
-    local_ink = (ink_delta > np.maximum(14.0, local_std * 0.42 + 6.0)) & (gray_float < 222) & (gradient > 8)
-    text_body = (gray_float < min(float(otsu_threshold) - 6.0, 168.0)) & (ink_delta > 7)
-    text_edge = (ink_delta > 10) & (gradient > 34) & (gray_float < 214)
-    deep_ink = gray_float < 74
-    paper_texture = (gray_float > 190) & (ink_delta < 30) & (gradient < 32)
+    local_ink = (ink_delta > np.maximum(24.0, local_std * 0.58 + 10.0)) & (gray_float < 198) & (gradient > 15)
+    text_body = (gray_float < min(float(otsu_threshold) - 12.0, 144.0)) & (ink_delta > 15)
+    text_edge = (ink_delta > 18) & (gradient > 54) & (gray_float < 178)
+    deep_ink = gray_float < 62
+    paper_texture = (gray_float > 178) & (ink_delta < 40) & (gradient < 42)
     foreground_mask = (local_ink | text_body | text_edge | deep_ink) & ~paper_texture
     binary = np.where(foreground_mask, 0, 255).astype(np.uint8)
 
