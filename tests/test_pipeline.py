@@ -132,6 +132,8 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("cleanupBinaryImageData", html)
         self.assertIn("shouldRejectPartialBrightQuad", html)
         self.assertIn("buildIntegralImage", html)
+        self.assertIn("localStatsFromIntegrals", html)
+        self.assertIn("formBinaryMode", html)
         self.assertIn("件目を上へ移動", html)
         self.assertIn("端末内でPDFを生成中", html)
         self.assertIn("PocketCV 画像処理レポート", html)
@@ -154,6 +156,7 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("CACHE_NAME", worker)
         self.assertIn("install", worker)
         self.assertIn("fetch", worker)
+        self.assertIn("event.request.mode === \"navigate\"", worker)
 
 
 if __name__ == "__main__":
