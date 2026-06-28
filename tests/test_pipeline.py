@@ -82,6 +82,11 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("スキャンPDFを生成", html)
         self.assertIn("画像保存", html)
         self.assertIn("解析レポート", html)
+        self.assertIn("OCR実行", html)
+        self.assertIn("TESSERACT_SCRIPT_URL", html)
+        self.assertIn("runOcr", html)
+        self.assertIn("buildOcrCanvas", html)
+        self.assertIn("downloadOcrText", html)
         self.assertIn("PDFを共有", html)
         self.assertIn("アプリを追加", html)
         self.assertIn("白黒スキャン", html)
@@ -106,6 +111,7 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("serviceWorker", html)
         self.assertIn("beforeinstallprompt", html)
         self.assertIn("canvasToBlob", html)
+        self.assertIn("Tesseract.recognize", html)
         self.assertNotIn("/api/pdf", html)
 
     def test_static_app_has_pwa_worker(self) -> None:

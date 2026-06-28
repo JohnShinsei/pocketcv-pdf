@@ -243,7 +243,7 @@
       .workspace {
         padding: 22px;
         display: grid;
-        grid-template-rows: auto 1fr;
+        grid-template-rows: auto minmax(0, 1fr) auto;
         gap: 18px;
         min-width: 0;
       }
@@ -298,6 +298,68 @@
       .secondary-action {
         color: var(--ink);
         background: #ffffff;
+      }
+
+      .ocr-panel {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #ffffff;
+        overflow: hidden;
+      }
+
+      .ocr-panel[hidden] {
+        display: none;
+      }
+
+      .ocr-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .ocr-title {
+        margin: 0;
+        font-size: 16px;
+      }
+
+      .ocr-status {
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .ocr-controls {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .ocr-select {
+        min-height: 40px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 10px;
+        background: #ffffff;
+        color: var(--ink);
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .ocr-output {
+        width: 100%;
+        min-height: 180px;
+        border: 0;
+        resize: vertical;
+        padding: 12px;
+        color: var(--ink);
+        background: #fbfcfe;
+        font: 14px/1.65 "Noto Sans JP", "Yu Gothic", ui-monospace, SFMono-Regular, Consolas, monospace;
       }
 
       .pages {
@@ -474,6 +536,21 @@
           width: 100%;
         }
 
+        .ocr-header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .ocr-controls {
+          justify-content: flex-start;
+          width: 100%;
+        }
+
+        .ocr-select,
+        .ocr-controls button {
+          flex: 1 1 136px;
+        }
+
         .brand {
           align-items: flex-start;
           flex-direction: column;
@@ -552,6 +629,26 @@
         <div id="pages" class="pages">
           <div class="placeholder">まだ画像がありません</div>
         </div>
+        <section id="ocr-panel" class="ocr-panel" hidden>
+          <div class="ocr-header">
+            <div>
+              <h2 class="ocr-title">OCR</h2>
+              <div id="ocr-status" class="ocr-status">未実行</div>
+            </div>
+            <div class="ocr-controls">
+              <select id="ocr-lang" class="ocr-select" aria-label="OCR言語">
+                <option value="jpn+eng">日本語+英語</option>
+                <option value="jpn">日本語</option>
+                <option value="eng">英語</option>
+                <option value="chi_sim+eng">中国語簡体字+英語</option>
+              </select>
+              <button id="ocr-run" class="secondary-action" type="button" disabled>OCR実行</button>
+              <button id="ocr-copy" class="secondary-action" type="button" disabled>コピー</button>
+              <button id="ocr-download" class="secondary-action" type="button" disabled>TXT保存</button>
+            </div>
+          </div>
+          <textarea id="ocr-output" class="ocr-output" readonly placeholder="OCR結果"></textarea>
+        </section>
       </section>
     </main>
 
@@ -578,6 +675,8 @@
       const PAGE_MARGIN = 24;
       const PDF_MAX_IMAGE_EDGE = 2200;
       const PDF_MAX_IMAGE_PIXELS = 2600000;
+      const TESSERACT_SCRIPT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+      let tesseractLoadPromise = null;
 
       const state = {
         pages: [],
@@ -585,6 +684,9 @@
         pdfUrl: null,
         pdfBlob: null,
         pdfName: "",
+        ocrText: "",
+        ocrConfidence: null,
+        ocrBusy: false,
         deferredInstallPrompt: null,
         busy: false,
       };
@@ -613,6 +715,13 @@
       const installButton = document.querySelector("#install");
       const filenameInput = document.querySelector("#filename");
       const modeEl = document.querySelector("#mode");
+      const ocrPanel = document.querySelector("#ocr-panel");
+      const ocrStatusEl = document.querySelector("#ocr-status");
+      const ocrLangEl = document.querySelector("#ocr-lang");
+      const ocrRunButton = document.querySelector("#ocr-run");
+      const ocrCopyButton = document.querySelector("#ocr-copy");
+      const ocrDownloadButton = document.querySelector("#ocr-download");
+      const ocrOutputEl = document.querySelector("#ocr-output");
       const cornerDialog = document.querySelector("#corner-dialog");
       const cornerCanvas = document.querySelector("#corner-editor-canvas");
       const cornerCloseButton = document.querySelector("#corner-close");
@@ -621,6 +730,14 @@
 
       function clamp(value, min, max) {
         return Math.max(min, Math.min(max, value));
+      }
+
+      function syncOcrControls() {
+        ocrPanel.hidden = state.pages.length === 0 && !state.ocrText;
+        ocrLangEl.disabled = state.busy || state.ocrBusy || state.pages.length === 0;
+        ocrRunButton.disabled = state.busy || state.ocrBusy || state.pages.length === 0;
+        ocrCopyButton.disabled = state.busy || state.ocrBusy || !state.ocrText;
+        ocrDownloadButton.disabled = state.busy || state.ocrBusy || !state.ocrText;
       }
 
       function setBusy(value) {
@@ -634,11 +751,30 @@
         installButton.disabled = value || !state.deferredInstallPrompt;
         cornerResetButton.disabled = value;
         cornerApplyButton.disabled = value;
+        syncOcrControls();
       }
 
       function setStatus(message, isError = false) {
         statusEl.textContent = message;
         statusEl.style.color = isError ? "var(--warn)" : "var(--muted)";
+      }
+
+      function setOcrStatus(message, isError = false) {
+        ocrStatusEl.textContent = message;
+        ocrStatusEl.style.color = isError ? "var(--warn)" : "var(--muted)";
+      }
+
+      function resetOcrResult() {
+        state.ocrText = "";
+        state.ocrConfidence = null;
+        ocrOutputEl.value = "";
+        setOcrStatus(state.pages.length ? "未実行" : "画像なし");
+        syncOcrControls();
+      }
+
+      function setOcrBusy(value) {
+        state.ocrBusy = value;
+        syncOcrControls();
       }
 
       function updateStatus() {
@@ -668,7 +804,7 @@
 
       function sanitizePdfName(value) {
         const cleaned = value.trim().replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-");
-        return cleaned || "pocketcv-report";
+        return cleaned || "pocketcv-scan";
       }
 
       function formatFileSize(bytes) {
@@ -747,6 +883,7 @@
             state.pages[index - 1] = page;
             state.pages[index] = previous;
             revokePdfUrl();
+            resetOcrResult();
             refreshPages();
           });
 
@@ -761,6 +898,7 @@
             state.pages[index + 1] = page;
             state.pages[index] = next;
             revokePdfUrl();
+            resetOcrResult();
             refreshPages();
           });
 
@@ -773,6 +911,7 @@
             URL.revokeObjectURL(page.previewUrl);
             state.pages.splice(index, 1);
             revokePdfUrl();
+            resetOcrResult();
             refreshPages();
           });
 
@@ -865,6 +1004,139 @@
             reject(error);
           }
         });
+      }
+
+      function loadTesseract() {
+        if (window.Tesseract) {
+          return Promise.resolve(window.Tesseract);
+        }
+
+        if (!tesseractLoadPromise) {
+          tesseractLoadPromise = new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = TESSERACT_SCRIPT_URL;
+            script.async = true;
+            script.onload = () => {
+              if (window.Tesseract) {
+                resolve(window.Tesseract);
+              } else {
+                reject(new Error("OCRエンジンを読み込めませんでした。"));
+              }
+            };
+            script.onerror = () => reject(new Error("OCRエンジンを読み込めませんでした。通信状態を確認してください。"));
+            document.head.appendChild(script);
+          });
+        }
+
+        return tesseractLoadPromise;
+      }
+
+      function ocrProgressText(message) {
+        const status = message.status ? String(message.status).replace(/_/g, " ") : "OCR";
+        if (typeof message.progress === "number" && Number.isFinite(message.progress)) {
+          return `${status} ${Math.round(message.progress * 100)}%`;
+        }
+        return status;
+      }
+
+      function formatOcrPageText(index, page, text, totalPages) {
+        const cleaned = text.trim();
+        if (totalPages === 1) {
+          return cleaned;
+        }
+        return [`# ${index + 1}件目 ${page.displayName}`, cleaned || "文字を検出できませんでした。"].join("\n");
+      }
+
+      function buildOcrCanvas(page) {
+        if (page.ocrCanvas) {
+          return page.ocrCanvas;
+        }
+
+        const corrected = perspectiveCorrectCanvas(page.sourceCanvas, page.manualCorners);
+        page.ocrCanvas = enhanceCanvas(corrected.canvas, "gray", corrected.detection).canvas;
+        return page.ocrCanvas;
+      }
+
+      async function runOcr() {
+        if (!state.pages.length) {
+          setOcrStatus("画像なし", true);
+          return;
+        }
+
+        setOcrBusy(true);
+        state.ocrText = "";
+        state.ocrConfidence = null;
+        ocrOutputEl.value = "";
+        setOcrStatus("OCR準備中...");
+
+        try {
+          const Tesseract = await loadTesseract();
+          const language = ocrLangEl.value;
+          const chunks = [];
+          const confidences = [];
+
+          for (let index = 0; index < state.pages.length; index += 1) {
+            const page = state.pages[index];
+            setOcrStatus(`OCR ${index + 1}/${state.pages.length} 準備中...`);
+            const ocrCanvas = buildOcrCanvas(page);
+            const result = await Tesseract.recognize(ocrCanvas.toDataURL("image/png"), language, {
+              logger: (message) => setOcrStatus(`OCR ${index + 1}/${state.pages.length} · ${ocrProgressText(message)}`),
+            });
+            const text = result && result.data && result.data.text ? result.data.text : "";
+            const confidence = result && result.data ? Number(result.data.confidence) : NaN;
+            if (Number.isFinite(confidence)) {
+              confidences.push(confidence);
+            }
+            chunks.push(formatOcrPageText(index, page, text, state.pages.length));
+          }
+
+          const joined = chunks.join("\n\n").trim();
+          state.ocrText = joined;
+          if (confidences.length) {
+            state.ocrConfidence = confidences.reduce((sum, value) => sum + value, 0) / confidences.length;
+          }
+          ocrOutputEl.value = joined || "文字を検出できませんでした。";
+          setOcrStatus(
+            state.ocrConfidence === null ? "OCR完了" : `OCR完了 · 信頼度 ${Math.round(state.ocrConfidence)}`
+          );
+        } catch (error) {
+          state.ocrText = "";
+          state.ocrConfidence = null;
+          ocrOutputEl.value = "";
+          setOcrStatus(error.message || "OCRに失敗しました。", true);
+        } finally {
+          setOcrBusy(false);
+        }
+      }
+
+      async function copyOcrText() {
+        if (!state.ocrText) {
+          return;
+        }
+
+        try {
+          await navigator.clipboard.writeText(state.ocrText);
+          setOcrStatus("OCR結果をコピーしました。");
+        } catch (_error) {
+          setOcrStatus("コピーできませんでした。", true);
+        }
+      }
+
+      function downloadOcrText() {
+        if (!state.ocrText) {
+          return;
+        }
+
+        const blob = new Blob([state.ocrText], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${sanitizePdfName(filenameInput.value)}.txt`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 800);
+        setOcrStatus("TXTを保存しました。");
       }
 
       function loadImage(blob) {
@@ -1594,6 +1866,7 @@
         try {
           const page = await processBlob(blob, name);
           state.pages.push(page);
+          resetOcrResult();
           refreshPages();
         } catch (error) {
           setBusy(false);
@@ -1616,6 +1889,7 @@
           for (const page of sourcePages) {
             state.pages.push(await processBlob(page.blob, page.name, page.manualCorners));
           }
+          resetOcrResult();
           refreshPages();
         } catch (error) {
           setBusy(false);
@@ -1765,6 +2039,7 @@
           URL.revokeObjectURL(page.previewUrl);
           state.pages[pageIndex] = updatedPage;
           closeCornerEditor();
+          resetOcrResult();
           refreshPages();
           setStatus("手動の四隅で再生成しました。");
         } catch (error) {
@@ -2138,7 +2413,7 @@
           const shareData = {
             files: [pdfFile],
             title: "PocketCV PDF",
-            text: "PocketCV PDFで生成した画像処理レポート",
+            text: "PocketCV PDFで生成したスキャンPDF",
           };
 
           if (!navigator.canShare || navigator.canShare(shareData)) {
@@ -2194,6 +2469,9 @@
       pdfButton.addEventListener("click", generatePdf);
       shareButton.addEventListener("click", sharePdf);
       installButton.addEventListener("click", promptInstall);
+      ocrRunButton.addEventListener("click", runOcr);
+      ocrCopyButton.addEventListener("click", copyOcrText);
+      ocrDownloadButton.addEventListener("click", downloadOcrText);
       modeEl.addEventListener("change", reprocessPages);
 
       window.addEventListener("beforeinstallprompt", (event) => {
@@ -2214,6 +2492,7 @@
         state.pages.forEach((page) => URL.revokeObjectURL(page.previewUrl));
         state.pages = [];
         revokePdfUrl();
+        resetOcrResult();
         refreshPages();
       });
 
