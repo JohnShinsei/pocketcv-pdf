@@ -68,6 +68,102 @@ def looks_like_partial_bright_region(points: np.ndarray, width: int, height: int
     return spans_width and height_coverage < 0.9 and area_ratio < 0.9 and (misses_top or misses_bottom)
 
 
+def looks_like_unsafe_full_frame_crop(points: np.ndarray, width: int, height: int, area_ratio: float) -> bool:
+    ordered = order_points(points)
+    min_x = float(np.min(ordered[:, 0]))
+    max_x = float(np.max(ordered[:, 0]))
+    max_y = float(np.max(ordered[:, 1]))
+    top_average = float(np.mean(ordered[:2, 1]))
+    top_skew = float(abs(ordered[0, 1] - ordered[1, 1]))
+
+    touches_left = min_x <= width * 0.025
+    touches_right = max_x >= width * 0.975
+    touches_bottom = max_y >= height * 0.975
+    would_crop_top_content = top_average > height * 0.16 or top_skew > height * 0.09
+    return area_ratio > 0.62 and touches_left and touches_right and touches_bottom and would_crop_top_content
+
+
+def quad_is_plausible(points: np.ndarray, width: int, height: int, area_ratio: float) -> bool:
+    ordered = order_points(points)
+    top_width = np.linalg.norm(ordered[1] - ordered[0])
+    bottom_width = np.linalg.norm(ordered[2] - ordered[3])
+    left_height = np.linalg.norm(ordered[3] - ordered[0])
+    right_height = np.linalg.norm(ordered[2] - ordered[1])
+    min_side = min(top_width, bottom_width, left_height, right_height)
+    return 0.12 <= area_ratio <= 0.97 and min_side >= min(width, height) * 0.15
+
+
+def approximate_quad(contour: np.ndarray) -> np.ndarray | None:
+    hull = cv2.convexHull(contour)
+    perimeter = cv2.arcLength(hull, True)
+    for epsilon in (0.015, 0.02, 0.03, 0.045, 0.06, 0.08):
+        approx = cv2.approxPolyDP(hull, epsilon * perimeter, True)
+        if len(approx) == 4 and cv2.isContourConvex(approx):
+            return approx.reshape(4, 2).astype(np.float32)
+    return None
+
+
+def detect_connected_document_region(image: np.ndarray, max_dim: int = 900) -> DocumentDetection | None:
+    bgr = ensure_bgr(image)
+    height, width = bgr.shape[:2]
+    scale = min(1.0, max_dim / float(max(width, height)))
+    small = cv2.resize(bgr, (int(width * scale), int(height * scale)), interpolation=cv2.INTER_AREA) if scale < 1.0 else bgr
+
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    otsu_threshold, _ = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    threshold = max(70.0, min(150.0, min(float(otsu_threshold) - 10.0, float(np.percentile(gray, 20)) + 8.0)))
+    mask = np.where(gray >= threshold, 255, 0).astype(np.uint8)
+
+    kernel_size = max(9, int(round(max(gray.shape[:2]) / 55)))
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    image_area = float(width * height)
+    small_area = float(small.shape[0] * small.shape[1])
+    best: tuple[np.ndarray, float] | None = None
+    for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:6]:
+        contour_area = float(cv2.contourArea(contour))
+        if contour_area < small_area * 0.08:
+            continue
+
+        quad = approximate_quad(contour)
+        if quad is None:
+            continue
+
+        quad = quad / scale
+        quad[:, 0] = np.clip(quad[:, 0], 0, width - 1)
+        quad[:, 1] = np.clip(quad[:, 1], 0, height - 1)
+        ordered = order_points(quad)
+        area_ratio = min(1.0, polygon_area(ordered) / image_area)
+        if not quad_is_plausible(ordered, width, height, area_ratio):
+            continue
+        if looks_like_partial_bright_region(ordered, width, height, area_ratio):
+            continue
+        if looks_like_unsafe_full_frame_crop(ordered, width, height, area_ratio):
+            continue
+
+        if best is None or contour_area > best[1]:
+            best = (ordered, contour_area)
+
+    if best is None:
+        return None
+
+    ordered, contour_area = best
+    area_ratio = min(1.0, polygon_area(ordered) / image_area)
+    confidence = min(0.93, 0.34 + area_ratio * 0.5 + min(0.18, contour_area / small_area))
+    return DocumentDetection(
+        corners=np.round(ordered, 2).tolist(),
+        confidence=round(float(confidence), 3),
+        area_ratio=round(float(area_ratio), 3),
+        method="connected_paper",
+        found=True,
+    )
+
+
 def detect_bright_document_region(image: np.ndarray, max_dim: int = 900) -> DocumentDetection | None:
     bgr = ensure_bgr(image)
     height, width = bgr.shape[:2]
@@ -102,14 +198,11 @@ def detect_bright_document_region(image: np.ndarray, max_dim: int = 900) -> Docu
         ordered = order_points(box)
         area_ratio = min(1.0, polygon_area(ordered) / image_area)
 
-        top_width = np.linalg.norm(ordered[1] - ordered[0])
-        bottom_width = np.linalg.norm(ordered[2] - ordered[3])
-        left_height = np.linalg.norm(ordered[3] - ordered[0])
-        right_height = np.linalg.norm(ordered[2] - ordered[1])
-        min_side = min(top_width, bottom_width, left_height, right_height)
-        if area_ratio < 0.12 or area_ratio > 0.96 or min_side < min(width, height) * 0.15:
+        if not quad_is_plausible(ordered, width, height, area_ratio):
             continue
         if looks_like_partial_bright_region(ordered, width, height, area_ratio):
+            continue
+        if looks_like_unsafe_full_frame_crop(ordered, width, height, area_ratio):
             continue
 
         confidence = min(0.88, 0.28 + area_ratio * 0.55 + min(0.2, contour_area / small_area))
@@ -161,6 +254,9 @@ def detect_document_corners(image: np.ndarray, max_dim: int = 900) -> DocumentDe
             best_rect = (box, contour_area, "min_area_rect")
 
     if best_rect is None:
+        connected_detection = detect_connected_document_region(bgr, max_dim=max_dim)
+        if connected_detection is not None:
+            return connected_detection
         brightness_detection = detect_bright_document_region(bgr, max_dim=max_dim)
         if brightness_detection is not None:
             return brightness_detection
@@ -169,6 +265,17 @@ def detect_document_corners(image: np.ndarray, max_dim: int = 900) -> DocumentDe
     points, contour_area, method = best_rect
     ordered = order_points(points)
     area_ratio = min(1.0, polygon_area(ordered) / image_area)
+    if not quad_is_plausible(ordered, width, height, area_ratio) or looks_like_partial_bright_region(
+        ordered, width, height, area_ratio
+    ) or looks_like_unsafe_full_frame_crop(ordered, width, height, area_ratio):
+        connected_detection = detect_connected_document_region(bgr, max_dim=max_dim)
+        if connected_detection is not None:
+            return connected_detection
+        brightness_detection = detect_bright_document_region(bgr, max_dim=max_dim)
+        if brightness_detection is not None:
+            return brightness_detection
+        return image_border_detection(width, height)
+
     confidence = min(0.99, 0.25 + area_ratio * 0.9 + (0.2 if method == "contour_quad" else 0.0))
 
     return DocumentDetection(

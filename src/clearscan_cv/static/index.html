@@ -881,7 +881,7 @@
       }
 
       function fallbackCorners(sourceCanvas) {
-        const margin = Math.max(12, Math.min(sourceCanvas.width, sourceCanvas.height) * 0.05);
+        const margin = Math.max(2, Math.min(sourceCanvas.width, sourceCanvas.height) * 0.006);
         return [
           { x: margin, y: margin },
           { x: sourceCanvas.width - margin, y: margin },
@@ -1639,6 +1639,48 @@
         return Math.abs(area) / 2;
       }
 
+      function orderQuadPoints(points) {
+        const ordered = new Array(4);
+        let minSum = Infinity;
+        let maxSum = -Infinity;
+        let minDiff = Infinity;
+        let maxDiff = -Infinity;
+        points.forEach((point) => {
+          const sum = point.x + point.y;
+          const diff = point.x - point.y;
+          if (sum < minSum) {
+            minSum = sum;
+            ordered[0] = point;
+          }
+          if (diff > maxDiff) {
+            maxDiff = diff;
+            ordered[1] = point;
+          }
+          if (sum > maxSum) {
+            maxSum = sum;
+            ordered[2] = point;
+          }
+          if (diff < minDiff) {
+            minDiff = diff;
+            ordered[3] = point;
+          }
+        });
+
+        if (new Set(ordered).size === 4) {
+          return ordered.map((point) => ({ x: point.x, y: point.y }));
+        }
+
+        const byY = points.slice().sort((a, b) => a.y - b.y);
+        const top = byY.slice(0, 2).sort((a, b) => a.x - b.x);
+        const bottom = byY.slice(2).sort((a, b) => a.x - b.x);
+        return [
+          { x: top[0].x, y: top[0].y },
+          { x: top[1].x, y: top[1].y },
+          { x: bottom[1].x, y: bottom[1].y },
+          { x: bottom[0].x, y: bottom[0].y },
+        ];
+      }
+
       function expandQuad(points, width, height, ratio = 0.006) {
         const center = points.reduce((sum, point) => ({ x: sum.x + point.x / points.length, y: sum.y + point.y / points.length }), {
           x: 0,
@@ -1662,6 +1704,151 @@
         return widthCoverage > 0.76 && heightCoverage < 0.9 && areaRatio < 0.9 && (missesTop || missesBottom);
       }
 
+      function shouldRejectUnsafeFullFrameQuad(points, width, height, areaRatio) {
+        const minX = Math.min(...points.map((point) => point.x));
+        const maxX = Math.max(...points.map((point) => point.x));
+        const maxY = Math.max(...points.map((point) => point.y));
+        const topAverage = (points[0].y + points[1].y) / 2;
+        const topSkew = Math.abs(points[0].y - points[1].y);
+        const touchesLeft = minX <= width * 0.025;
+        const touchesRight = maxX >= width * 0.975;
+        const touchesBottom = maxY >= height * 0.975;
+        const wouldCropTopContent = topAverage > height * 0.16 || topSkew > height * 0.09;
+        return areaRatio > 0.62 && touchesLeft && touchesRight && touchesBottom && wouldCropTopContent;
+      }
+
+      function validateDetectedQuad(points, width, height) {
+        const ordered = orderQuadPoints(points);
+        const expanded = expandQuad(ordered, width, height);
+        const areaRatio = polygonArea(expanded) / (width * height);
+        const topWidth = pointDistance(expanded[0], expanded[1]);
+        const bottomWidth = pointDistance(expanded[3], expanded[2]);
+        const leftHeight = pointDistance(expanded[0], expanded[3]);
+        const rightHeight = pointDistance(expanded[1], expanded[2]);
+        const minSide = Math.min(topWidth, bottomWidth, leftHeight, rightHeight);
+        if (areaRatio < 0.15 || areaRatio > 0.97 || minSide < Math.min(width, height) * 0.16) {
+          return null;
+        }
+        if (shouldRejectPartialBrightQuad(expanded, width, height, areaRatio)) {
+          return null;
+        }
+        if (shouldRejectUnsafeFullFrameQuad(expanded, width, height, areaRatio)) {
+          return null;
+        }
+        return { corners: expanded, areaRatio };
+      }
+
+      function detectConnectedPaperQuad(sourceCanvas, image, step, histogram, samples) {
+        const { width, height } = sourceCanvas;
+        const data = image.data;
+        const paperThreshold = clamp(
+          Math.min(otsuThreshold(histogram, samples) - 10, percentileFromHistogram(histogram, samples, 0.2) + 8),
+          70,
+          150
+        );
+        const gridWidth = Math.ceil(width / step);
+        const gridHeight = Math.ceil(height / step);
+        const cellCount = gridWidth * gridHeight;
+        const mask = new Uint8Array(cellCount);
+        const visited = new Uint8Array(cellCount);
+
+        for (let gy = 0; gy < gridHeight; gy += 1) {
+          const y = Math.min(height - 1, gy * step);
+          for (let gx = 0; gx < gridWidth; gx += 1) {
+            const x = Math.min(width - 1, gx * step);
+            const index = (y * width + x) * 4;
+            if (luminance(data[index], data[index + 1], data[index + 2]) >= paperThreshold) {
+              mask[gy * gridWidth + gx] = 1;
+            }
+          }
+        }
+
+        const stack = new Int32Array(cellCount);
+        let best = null;
+        for (let start = 0; start < cellCount; start += 1) {
+          if (!mask[start] || visited[start]) {
+            continue;
+          }
+
+          let length = 0;
+          let count = 0;
+          let topLeft = { score: Infinity, point: null };
+          let topRight = { score: -Infinity, point: null };
+          let bottomRight = { score: -Infinity, point: null };
+          let bottomLeft = { score: Infinity, point: null };
+          visited[start] = 1;
+          stack[length] = start;
+          length += 1;
+
+          while (length > 0) {
+            length -= 1;
+            const cell = stack[length];
+            const gx = cell % gridWidth;
+            const gy = Math.floor(cell / gridWidth);
+            const x = Math.min(width - 1, gx * step);
+            const y = Math.min(height - 1, gy * step);
+            const sumScore = x + y;
+            const diffScore = x - y;
+
+            if (sumScore < topLeft.score) {
+              topLeft = { score: sumScore, point: { x, y } };
+            }
+            if (diffScore > topRight.score) {
+              topRight = { score: diffScore, point: { x, y } };
+            }
+            if (sumScore > bottomRight.score) {
+              bottomRight = { score: sumScore, point: { x, y } };
+            }
+            if (diffScore < bottomLeft.score) {
+              bottomLeft = { score: diffScore, point: { x, y } };
+            }
+            count += 1;
+
+            for (let yOffset = -1; yOffset <= 1; yOffset += 1) {
+              for (let xOffset = -1; xOffset <= 1; xOffset += 1) {
+                if (xOffset === 0 && yOffset === 0) {
+                  continue;
+                }
+                const nx = gx + xOffset;
+                const ny = gy + yOffset;
+                if (nx < 0 || ny < 0 || nx >= gridWidth || ny >= gridHeight) {
+                  continue;
+                }
+                const next = ny * gridWidth + nx;
+                if (mask[next] && !visited[next]) {
+                  visited[next] = 1;
+                  stack[length] = next;
+                  length += 1;
+                }
+              }
+            }
+          }
+
+          if (!best || count > best.count) {
+            best = {
+              count,
+              corners: [topLeft.point, topRight.point, bottomRight.point, bottomLeft.point],
+            };
+          }
+        }
+
+        if (!best || best.count < cellCount * 0.08 || best.corners.some((point) => !point)) {
+          return null;
+        }
+
+        const validated = validateDetectedQuad(best.corners, width, height);
+        if (!validated) {
+          return null;
+        }
+        return {
+          found: true,
+          confidence: clamp(validated.areaRatio * 1.1 + Math.min(best.count / cellCount, 0.35), 0.18, 0.96),
+          corners: validated.corners,
+          threshold: paperThreshold,
+          method: "connected_paper",
+        };
+      }
+
       function detectDocumentQuad(sourceCanvas) {
         const context = sourceCanvas.getContext("2d", { willReadFrequently: true });
         const { width, height } = sourceCanvas;
@@ -1682,6 +1869,11 @@
             histogram[Math.round(value)] += 1;
             samples += 1;
           }
+        }
+
+        const connectedCandidate = detectConnectedPaperQuad(sourceCanvas, image, step, histogram, samples);
+        if (connectedCandidate) {
+          return connectedCandidate;
         }
 
         const mean = sum / Math.max(1, samples);
@@ -1728,25 +1920,17 @@
           return { found: false, confidence: 0, corners: null, threshold };
         }
 
-        const expanded = expandQuad(corners, width, height);
-        const areaRatio = polygonArea(expanded) / (width * height);
-        const topWidth = pointDistance(expanded[0], expanded[1]);
-        const bottomWidth = pointDistance(expanded[3], expanded[2]);
-        const leftHeight = pointDistance(expanded[0], expanded[3]);
-        const rightHeight = pointDistance(expanded[1], expanded[2]);
-        const minSide = Math.min(topWidth, bottomWidth, leftHeight, rightHeight);
-        if (areaRatio < 0.15 || minSide < Math.min(width, height) * 0.16) {
-          return { found: false, confidence: 0, corners: null, threshold };
-        }
-        if (shouldRejectPartialBrightQuad(expanded, width, height, areaRatio)) {
+        const validated = validateDetectedQuad(corners, width, height);
+        if (!validated) {
           return { found: false, confidence: 0, corners: null, threshold };
         }
 
         return {
           found: true,
-          confidence: clamp(areaRatio * 1.35 + Math.min(hits / samples, 0.55), 0.1, 0.98),
-          corners: expanded,
+          confidence: clamp(validated.areaRatio * 1.35 + Math.min(hits / samples, 0.55), 0.1, 0.98),
+          corners: validated.corners,
           threshold,
+          method: "bright_extreme",
         };
       }
 
@@ -1828,12 +2012,19 @@
       }
 
       function warpPerspectiveCanvas(sourceCanvas, corners) {
-        const targetWidth = Math.max(80, Math.round(Math.max(pointDistance(corners[0], corners[1]), pointDistance(corners[3], corners[2]))));
-        const targetHeight = Math.max(80, Math.round(Math.max(pointDistance(corners[0], corners[3]), pointDistance(corners[1], corners[2]))));
+        const orderedCorners = orderQuadPoints(corners);
+        const targetWidth = Math.max(
+          80,
+          Math.round(Math.max(pointDistance(orderedCorners[0], orderedCorners[1]), pointDistance(orderedCorners[3], orderedCorners[2])))
+        );
+        const targetHeight = Math.max(
+          80,
+          Math.round(Math.max(pointDistance(orderedCorners[0], orderedCorners[3]), pointDistance(orderedCorners[1], orderedCorners[2])))
+        );
         const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(targetWidth, targetHeight));
         const width = Math.max(1, Math.round(targetWidth * scale));
         const height = Math.max(1, Math.round(targetHeight * scale));
-        const scaledCorners = corners.map((point) => ({ x: point.x, y: point.y }));
+        const scaledCorners = orderedCorners.map((point) => ({ x: point.x, y: point.y }));
         const coefficients = perspectiveCoefficients(scaledCorners, width, height);
 
         const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });

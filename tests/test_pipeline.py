@@ -11,7 +11,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from clearscan_cv.geometry import detect_bright_document_region, detect_document_corners  # noqa: E402
+from clearscan_cv.geometry import detect_bright_document_region, detect_connected_document_region, detect_document_corners  # noqa: E402
 from clearscan_cv.pipeline import enhance_image, process_file  # noqa: E402
 
 
@@ -44,6 +44,16 @@ def make_partial_bright_form() -> np.ndarray:
     return image
 
 
+def make_connected_document_with_bright_distractor() -> np.ndarray:
+    image = np.full((760, 620, 3), (54, 49, 42), dtype=np.uint8)
+    cv2.rectangle(image, (0, 0), (86, 60), (190, 188, 174), -1)
+    document = np.array([[86, 88], [550, 96], [610, 720], [18, 735]], dtype=np.int32)
+    cv2.fillConvexPoly(image, document, (188, 188, 180))
+    for i in range(13):
+        cv2.line(image, (120, 190 + i * 34), (500, 186 + i * 34), (68, 68, 65), 2, cv2.LINE_AA)
+    return image
+
+
 class PipelineTest(unittest.TestCase):
     def test_detects_document_quad(self) -> None:
         detection = detect_document_corners(make_synthetic_document())
@@ -65,6 +75,20 @@ class PipelineTest(unittest.TestCase):
 
         self.assertFalse(detection.found)
         self.assertEqual(detection.method, "image_border")
+
+    def test_connected_detector_ignores_separate_bright_distractor(self) -> None:
+        detection = detect_connected_document_region(make_connected_document_with_bright_distractor())
+
+        self.assertIsNotNone(detection)
+        assert detection is not None
+        self.assertTrue(detection.found)
+        self.assertEqual(detection.method, "connected_paper")
+        self.assertGreater(detection.corners[0][1], 65)
+
+    def test_connected_detector_rejects_unsafe_top_crop(self) -> None:
+        detection = detect_connected_document_region(make_partial_bright_form())
+
+        self.assertIsNone(detection)
 
     def test_enhancement_binary_output(self) -> None:
         result = enhance_image(make_synthetic_document(), mode="binary")
@@ -131,6 +155,11 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("inkLum", html)
         self.assertIn("cleanupBinaryImageData", html)
         self.assertIn("shouldRejectPartialBrightQuad", html)
+        self.assertIn("shouldRejectUnsafeFullFrameQuad", html)
+        self.assertIn("detectConnectedPaperQuad", html)
+        self.assertIn("connected_paper", html)
+        self.assertIn("orderQuadPoints", html)
+        self.assertIn("* 0.006", html)
         self.assertIn("buildIntegralImage", html)
         self.assertIn("localStatsFromIntegrals", html)
         self.assertIn("formBinaryMode", html)
