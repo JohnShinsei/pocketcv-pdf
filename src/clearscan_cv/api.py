@@ -38,6 +38,16 @@ def manifest() -> Response:
     return Response(manifest_path.read_text(encoding="utf-8"), media_type="application/manifest+json")
 
 
+@app.get("/sw.js")
+def service_worker() -> Response:
+    sw_path = Path(__file__).with_name("static") / "sw.js"
+    return Response(
+        sw_path.read_text(encoding="utf-8"),
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/"},
+    )
+
+
 @app.post("/api/process")
 async def process_upload(file: UploadFile = File(...), mode: str = Form("color")) -> dict[str, object]:
     data = await file.read()

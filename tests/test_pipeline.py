@@ -79,12 +79,29 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("qualityScore", html)
         self.assertIn("平均品質", html)
         self.assertIn("PDFファイル名", html)
+        self.assertIn("PDFを共有", html)
+        self.assertIn("アプリを追加", html)
         self.assertIn("件目を上へ移動", html)
         self.assertIn("端末内でPDFを生成中", html)
         self.assertIn("PocketCV 画像処理レポート", html)
+        self.assertIn("encodePdfImageFromCanvas", html)
+        self.assertIn("fitCanvasForPdf", html)
+        self.assertIn("CompressionStream", html)
+        self.assertIn("/FlateDecode", html)
+        self.assertIn("/Info", html)
         self.assertIn("navigator.mediaDevices", html)
+        self.assertIn("navigator.share", html)
+        self.assertIn("serviceWorker", html)
+        self.assertIn("beforeinstallprompt", html)
         self.assertIn("canvasToBlob", html)
         self.assertNotIn("/api/pdf", html)
+
+    def test_static_app_has_pwa_worker(self) -> None:
+        worker = (ROOT / "src" / "clearscan_cv" / "static" / "sw.js").read_text(encoding="utf-8")
+
+        self.assertIn("CACHE_NAME", worker)
+        self.assertIn("install", worker)
+        self.assertIn("fetch", worker)
 
 
 if __name__ == "__main__":

@@ -274,14 +274,30 @@
         font-weight: 900;
       }
 
-      .download {
+      .output-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .download,
+      .secondary-action {
+        min-height: 40px;
         border: 1px solid #cfe5df;
         border-radius: 8px;
         color: var(--accent);
+        font-size: 13px;
         font-weight: 900;
         text-decoration: none;
         padding: 8px 12px;
         background: #ecf7f4;
+      }
+
+      .secondary-action {
+        color: var(--ink);
+        background: #ffffff;
       }
 
       .pages {
@@ -386,6 +402,11 @@
           flex-direction: column;
         }
 
+        .output-actions {
+          justify-content: flex-start;
+          width: 100%;
+        }
+
         .brand {
           align-items: flex-start;
           flex-direction: column;
@@ -451,7 +472,11 @@
             <div id="status" class="status">0件 - 端末内処理</div>
             <div id="quality-summary" class="quality-summary">評価待ち</div>
           </div>
-          <a id="download" class="download" hidden download="pocketcv-report.pdf">PDFを保存</a>
+          <div class="output-actions">
+            <a id="download" class="download" hidden download="pocketcv-report.pdf">PDFを保存</a>
+            <button id="share" class="secondary-action" type="button" hidden disabled>PDFを共有</button>
+            <button id="install" class="secondary-action" type="button" hidden disabled>アプリを追加</button>
+          </div>
         </div>
         <div id="pages" class="pages">
           <div class="placeholder">まだ画像がありません</div>
@@ -464,11 +489,16 @@
       const A4_WIDTH = 595.28;
       const A4_HEIGHT = 841.89;
       const PAGE_MARGIN = 24;
+      const PDF_MAX_IMAGE_EDGE = 2200;
+      const PDF_MAX_IMAGE_PIXELS = 2600000;
 
       const state = {
         pages: [],
         stream: null,
         pdfUrl: null,
+        pdfBlob: null,
+        pdfName: "",
+        deferredInstallPrompt: null,
         busy: false,
       };
 
@@ -484,6 +514,8 @@
       const statusEl = document.querySelector("#status");
       const qualitySummaryEl = document.querySelector("#quality-summary");
       const downloadEl = document.querySelector("#download");
+      const shareButton = document.querySelector("#share");
+      const installButton = document.querySelector("#install");
       const filenameInput = document.querySelector("#filename");
       const modeEl = document.querySelector("#mode");
 
@@ -498,6 +530,8 @@
         fileInput.disabled = value;
         clearButton.disabled = value || state.pages.length === 0;
         pdfButton.disabled = value || state.pages.length === 0;
+        shareButton.disabled = value || !state.pdfBlob;
+        installButton.disabled = value || !state.deferredInstallPrompt;
       }
 
       function setStatus(message, isError = false) {
@@ -535,13 +569,29 @@
         return cleaned || "pocketcv-report";
       }
 
+      function formatFileSize(bytes) {
+        if (bytes >= 1024 * 1024) {
+          return `${Math.round((bytes / 1024 / 1024) * 10) / 10} MB`;
+        }
+        return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+      }
+
       function revokePdfUrl() {
         if (state.pdfUrl) {
           URL.revokeObjectURL(state.pdfUrl);
           state.pdfUrl = null;
         }
+        state.pdfBlob = null;
+        state.pdfName = "";
         downloadEl.hidden = true;
         downloadEl.removeAttribute("href");
+        shareButton.hidden = true;
+        shareButton.disabled = true;
+      }
+
+      function updateInstallButton() {
+        installButton.hidden = !state.deferredInstallPrompt;
+        installButton.disabled = state.busy || !state.deferredInstallPrompt;
       }
 
       function refreshPages() {
@@ -1190,18 +1240,20 @@
       }
 
       async function processBlob(blob, name) {
+        const renderMode = modeEl.value;
         const image = await loadImage(blob);
         const sourceCanvas = drawImageToCanvas(image);
         const corrected = perspectiveCorrectCanvas(sourceCanvas);
-        const enhanced = enhanceCanvas(corrected.canvas, modeEl.value, corrected.detection);
+        const enhanced = enhanceCanvas(corrected.canvas, renderMode, corrected.detection);
         const processedCanvas =
-          modeEl.value === "report" ? buildAnalysisCanvas(sourceCanvas, enhanced.canvas, enhanced.edgeCanvas, enhanced.metrics) : enhanced.canvas;
+          renderMode === "report" ? buildAnalysisCanvas(sourceCanvas, enhanced.canvas, enhanced.edgeCanvas, enhanced.metrics) : enhanced.canvas;
         const processedBlob = await canvasToBlob(processedCanvas, "image/jpeg", 0.92);
         return {
           sourceBlob: blob,
           name,
           displayName: name.replace(/\.[^.]+$/, "").slice(0, 28),
           canvas: processedCanvas,
+          pdfMode: renderMode,
           metrics: enhanced.metrics,
           previewUrl: URL.createObjectURL(processedBlob),
         };
@@ -1297,12 +1349,111 @@
         return output;
       }
 
-      async function jpegBytesFromCanvas(pageCanvas) {
-        const blob = await canvasToBlob(pageCanvas, "image/jpeg", 0.92);
+      function fitCanvasForPdf(sourceCanvas) {
+        const pixelScale = Math.sqrt(PDF_MAX_IMAGE_PIXELS / Math.max(1, sourceCanvas.width * sourceCanvas.height));
+        const edgeScale = PDF_MAX_IMAGE_EDGE / Math.max(sourceCanvas.width, sourceCanvas.height);
+        const scale = Math.min(1, pixelScale, edgeScale);
+        if (scale >= 0.995) {
+          return sourceCanvas;
+        }
+
+        const output = document.createElement("canvas");
+        output.width = Math.max(1, Math.round(sourceCanvas.width * scale));
+        output.height = Math.max(1, Math.round(sourceCanvas.height * scale));
+        const context = output.getContext("2d");
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, output.width, output.height);
+        context.drawImage(sourceCanvas, 0, 0, output.width, output.height);
+        return output;
+      }
+
+      function grayscaleBytesFromCanvas(sourceCanvas) {
+        const context = sourceCanvas.getContext("2d", { willReadFrequently: true });
+        const image = context.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+        const gray = new Uint8Array(sourceCanvas.width * sourceCanvas.height);
+        for (let i = 0, p = 0; i < image.data.length; i += 4, p += 1) {
+          gray[p] = Math.round(luminance(image.data[i], image.data[i + 1], image.data[i + 2]));
+        }
+        return gray;
+      }
+
+      async function deflateBytes(bytes) {
+        if (!("CompressionStream" in window)) {
+          return null;
+        }
+
+        const compressedStream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate"));
+        return new Uint8Array(await new Response(compressedStream).arrayBuffer());
+      }
+
+      function jpegQualityForPdfMode(mode) {
+        if (mode === "report") {
+          return 0.88;
+        }
+        if (mode === "gray") {
+          return 0.87;
+        }
+        if (mode === "binary" || mode === "edges") {
+          return 0.9;
+        }
+        return 0.91;
+      }
+
+      async function jpegBytesFromCanvas(pageCanvas, quality) {
+        const blob = await canvasToBlob(pageCanvas, "image/jpeg", quality);
         return new Uint8Array(await blob.arrayBuffer());
       }
 
-      async function createPdfBlob(pages) {
+      async function encodePdfImageFromCanvas(pageCanvas, mode) {
+        const canvasForPdf = fitCanvasForPdf(pageCanvas);
+        if (mode === "binary" || mode === "edges") {
+          const grayBytes = grayscaleBytesFromCanvas(canvasForPdf);
+          const compressed = await deflateBytes(grayBytes);
+          if (compressed && compressed.length < grayBytes.length) {
+            return {
+              bytes: compressed,
+              width: canvasForPdf.width,
+              height: canvasForPdf.height,
+              colorSpace: "/DeviceGray",
+              bitsPerComponent: 8,
+              filter: "/FlateDecode",
+            };
+          }
+        }
+
+        return {
+          bytes: await jpegBytesFromCanvas(canvasForPdf, jpegQualityForPdfMode(mode)),
+          width: canvasForPdf.width,
+          height: canvasForPdf.height,
+          colorSpace: "/DeviceRGB",
+          bitsPerComponent: 8,
+          filter: "/DCTDecode",
+        };
+      }
+
+      function pdfUtf16HexString(value) {
+        const bytes = [0xfe, 0xff];
+        for (let i = 0; i < value.length; i += 1) {
+          const code = value.charCodeAt(i);
+          bytes.push((code >> 8) & 0xff, code & 0xff);
+        }
+        return `<${bytes.map((byte) => byte.toString(16).padStart(2, "0").toUpperCase()).join("")}>`;
+      }
+
+      function pdfDateString(date = new Date()) {
+        const pad = (value, length = 2) => String(value).padStart(length, "0");
+        const offset = -date.getTimezoneOffset();
+        const sign = offset >= 0 ? "+" : "-";
+        const hours = pad(Math.floor(Math.abs(offset) / 60));
+        const minutes = pad(Math.abs(offset) % 60);
+        return `D:${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}${pad(date.getHours())}${pad(
+          date.getMinutes()
+        )}${pad(date.getSeconds())}${sign}${hours}'${minutes}'`;
+      }
+
+      async function createPdfBlob(pages, title = "PocketCV PDF") {
         const encoder = new TextEncoder();
         const objects = new Map();
         let nextId = 1;
@@ -1310,15 +1461,12 @@
 
         const catalogId = reserve();
         const pagesId = reserve();
+        const infoId = reserve();
         const pageRefs = [];
 
         const imageData = [];
         for (const page of pages) {
-          imageData.push({
-            bytes: await jpegBytesFromCanvas(page.canvas),
-            width: page.canvas.width,
-            height: page.canvas.height,
-          });
+          imageData.push(await encodePdfImageFromCanvas(page.canvas, page.pdfMode || "color"));
         }
 
         imageData.forEach((image, index) => {
@@ -1350,15 +1498,25 @@
           ]);
           objects.set(imageId, [
             textBytes(
-              `<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.bytes.length} >>\nstream\n`
+              `<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace ${image.colorSpace} /BitsPerComponent ${image.bitsPerComponent} /Filter ${image.filter} /Length ${image.bytes.length} >>\nstream\n`
             ),
             image.bytes,
             textBytes("\nendstream"),
           ]);
         });
 
-        objects.set(catalogId, [textBytes(`<< /Type /Catalog /Pages ${pagesId} 0 R >>`)]);
+        const now = pdfDateString();
+        objects.set(catalogId, [textBytes(`<< /Type /Catalog /Pages ${pagesId} 0 R /Lang (ja-JP) >>`)]);
         objects.set(pagesId, [textBytes(`<< /Type /Pages /Count ${pages.length} /Kids [${pageRefs.join(" ")}] >>`)]);
+        objects.set(infoId, [
+          textBytes(
+            `<< /Title ${pdfUtf16HexString(title)} /Author ${pdfUtf16HexString("PocketCV PDF")} /Creator ${pdfUtf16HexString(
+              "PocketCV PDF"
+            )} /Producer ${pdfUtf16HexString("PocketCV PDF local browser engine")} /CreationDate ${pdfUtf16HexString(
+              now
+            )} /ModDate ${pdfUtf16HexString(now)} >>`
+          ),
+        ]);
 
         const chunks = [textBytes("%PDF-1.4\n")];
         const offsets = [0];
@@ -1385,7 +1543,7 @@
         for (let id = 1; id < nextId; id += 1) {
           xref += `${String(offsets[id]).padStart(10, "0")} 00000 n \n`;
         }
-        xref += `trailer\n<< /Size ${nextId} /Root ${catalogId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+        xref += `trailer\n<< /Size ${nextId} /Root ${catalogId} 0 R /Info ${infoId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
         chunks.push(textBytes(xref));
 
         return new Blob([concatBytes(chunks)], { type: "application/pdf" });
@@ -1400,28 +1558,112 @@
         setBusy(true);
         setStatus("端末内でPDFを生成中...");
         try {
-          const blob = await createPdfBlob(state.pages);
+          const pdfTitle = sanitizePdfName(filenameInput.value);
+          const blob = await createPdfBlob(state.pages, pdfTitle);
           if (!blob.size) {
             throw new Error("PDF生成に失敗しました。");
           }
 
           state.pdfUrl = URL.createObjectURL(blob);
+          state.pdfBlob = blob;
+          state.pdfName = `${pdfTitle}.pdf`;
           downloadEl.href = state.pdfUrl;
-          downloadEl.download = `${sanitizePdfName(filenameInput.value)}.pdf`;
+          downloadEl.download = state.pdfName;
           downloadEl.hidden = false;
+          shareButton.hidden = false;
+          shareButton.disabled = false;
           downloadEl.click();
           setBusy(false);
-          setStatus(`PDF生成完了 - ${state.pages.length}件`);
+          setStatus(`PDF生成完了 - ${state.pages.length}件 / ${formatFileSize(blob.size)}`);
         } catch (error) {
           setBusy(false);
           setStatus(error.message || "PDF生成に失敗しました。", true);
         }
       }
 
+      async function sharePdf() {
+        if (!state.pdfBlob) {
+          setStatus("共有するPDFがありません。", true);
+          return;
+        }
+
+        const filename = state.pdfName || `${sanitizePdfName(filenameInput.value)}.pdf`;
+        if ("share" in navigator && typeof File !== "undefined") {
+          const pdfFile = new File([state.pdfBlob], filename, { type: "application/pdf" });
+          const shareData = {
+            files: [pdfFile],
+            title: "PocketCV PDF",
+            text: "PocketCV PDFで生成した画像処理レポート",
+          };
+
+          if (!navigator.canShare || navigator.canShare(shareData)) {
+            try {
+              await navigator.share(shareData);
+              setStatus("PDF共有を開始しました。");
+              return;
+            } catch (error) {
+              if (error && error.name === "AbortError") {
+                setStatus("共有をキャンセルしました。");
+                return;
+              }
+            }
+          }
+        }
+
+        downloadEl.click();
+        setStatus("このブラウザはPDF共有に非対応です。PDFを保存してください。");
+      }
+
+      async function registerServiceWorker() {
+        if (!("serviceWorker" in navigator)) {
+          return;
+        }
+
+        try {
+          await navigator.serviceWorker.register("sw.js");
+        } catch (_error) {
+          // Offline support is progressive enhancement; PDF generation still works.
+        }
+      }
+
+      async function promptInstall() {
+        const promptEvent = state.deferredInstallPrompt;
+        if (!promptEvent) {
+          return;
+        }
+
+        promptEvent.prompt();
+        try {
+          const choice = await promptEvent.userChoice;
+          setStatus(choice.outcome === "accepted" ? "アプリ追加を開始しました。" : "追加をキャンセルしました。");
+        } catch (_error) {
+          setStatus("アプリ追加を完了できませんでした。", true);
+        } finally {
+          state.deferredInstallPrompt = null;
+          updateInstallButton();
+        }
+      }
+
       startButton.addEventListener("click", startCamera);
       captureButton.addEventListener("click", capturePage);
       pdfButton.addEventListener("click", generatePdf);
+      shareButton.addEventListener("click", sharePdf);
+      installButton.addEventListener("click", promptInstall);
       modeEl.addEventListener("change", reprocessPages);
+
+      window.addEventListener("beforeinstallprompt", (event) => {
+        event.preventDefault();
+        state.deferredInstallPrompt = event;
+        updateInstallButton();
+      });
+
+      window.addEventListener("appinstalled", () => {
+        state.deferredInstallPrompt = null;
+        updateInstallButton();
+        setStatus("アプリを追加しました。");
+      });
+
+      window.addEventListener("load", registerServiceWorker);
 
       clearButton.addEventListener("click", () => {
         state.pages.forEach((page) => URL.revokeObjectURL(page.previewUrl));
