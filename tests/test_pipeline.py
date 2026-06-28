@@ -34,6 +34,16 @@ def make_low_contrast_document() -> np.ndarray:
     return image
 
 
+def make_partial_bright_form() -> np.ndarray:
+    image = np.full((720, 560, 3), (88, 88, 84), dtype=np.uint8)
+    image[150:705, 0:550] = (214, 214, 207)
+    cv2.putText(image, "HOSPITAL FORM", (130, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (35, 35, 35), 2, cv2.LINE_AA)
+    cv2.putText(image, "FORM TITLE", (160, 125), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (35, 35, 35), 2, cv2.LINE_AA)
+    for i in range(12):
+        cv2.line(image, (45, 205 + i * 34), (505, 208 + i * 34), (70, 70, 70), 2, cv2.LINE_AA)
+    return image
+
+
 class PipelineTest(unittest.TestCase):
     def test_detects_document_quad(self) -> None:
         detection = detect_document_corners(make_synthetic_document())
@@ -49,6 +59,12 @@ class PipelineTest(unittest.TestCase):
         self.assertTrue(detection.found)
         self.assertEqual(detection.method, "brightness_rect")
         self.assertGreater(detection.area_ratio, 0.25)
+
+    def test_rejects_partial_bright_region_that_would_crop_header(self) -> None:
+        detection = detect_document_corners(make_partial_bright_form())
+
+        self.assertFalse(detection.found)
+        self.assertEqual(detection.method, "image_border")
 
     def test_enhancement_binary_output(self) -> None:
         result = enhance_image(make_synthetic_document(), mode="binary")
@@ -68,6 +84,17 @@ class PipelineTest(unittest.TestCase):
             self.assertTrue(Path(str(report["output_path"])).exists())
             self.assertTrue(Path(str(report["report_path"])).exists())
             self.assertTrue(Path(str(report["comparison_path"])).exists())
+
+    def test_process_file_reads_unicode_windows_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_path = tmp_path / "病例截图.png"
+            encoded = cv2.imencode(".png", make_synthetic_document())[1]
+            encoded.tofile(str(input_path))
+
+            report = process_file(input_path, tmp_path / "out", mode="binary")
+
+            self.assertTrue(Path(str(report["output_path"])).exists())
 
     def test_static_app_generates_pdf_on_device(self) -> None:
         html = (ROOT / "src" / "clearscan_cv" / "static" / "index.html").read_text(encoding="utf-8")
@@ -103,6 +130,8 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("interpolatedTileValue", html)
         self.assertIn("inkLum", html)
         self.assertIn("cleanupBinaryImageData", html)
+        self.assertIn("shouldRejectPartialBrightQuad", html)
+        self.assertIn("buildIntegralImage", html)
         self.assertIn("件目を上へ移動", html)
         self.assertIn("端末内でPDFを生成中", html)
         self.assertIn("PocketCV 画像処理レポート", html)

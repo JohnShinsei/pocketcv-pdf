@@ -56,9 +56,18 @@ def normalize_illumination(image: np.ndarray) -> np.ndarray:
 def to_clean_binary(image: np.ndarray) -> np.ndarray:
     bgr = ensure_bgr(image)
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    gray = unsharp_mask(gray, amount=0.45, radius=1.2)
-    threshold, _ = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    binary = np.where(gray < max(90, threshold - 30), 0, 255).astype(np.uint8)
+    gray = unsharp_mask(gray, amount=0.25, radius=1.0)
+
+    h, w = gray.shape[:2]
+    block_size = _odd_kernel(int(min(h, w) / 18), minimum=31, maximum=81)
+    binary = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        block_size,
+        15,
+    )
 
     foreground = 255 - binary
     count, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, 8)
@@ -67,7 +76,14 @@ def to_clean_binary(image: np.ndarray) -> np.ndarray:
         area = stats[label, cv2.CC_STAT_AREA]
         width = stats[label, cv2.CC_STAT_WIDTH]
         height = stats[label, cv2.CC_STAT_HEIGHT]
-        if area >= 18 or (area >= 8 and max(width, height) >= 6):
+        touches_edge = (
+            stats[label, cv2.CC_STAT_LEFT] <= 1
+            or stats[label, cv2.CC_STAT_TOP] <= 1
+            or stats[label, cv2.CC_STAT_LEFT] + width >= foreground.shape[1] - 2
+            or stats[label, cv2.CC_STAT_TOP] + height >= foreground.shape[0] - 2
+        )
+        is_edge_stain = touches_edge and area > foreground.size * 0.004 and min(width, height) > 12
+        if not is_edge_stain and (area >= 10 or (area >= 5 and max(width, height) >= 5)):
             kept[labels == label] = 255
     return 255 - kept
 
@@ -126,7 +142,8 @@ def process_file(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    image = cv2.imread(str(input_path), cv2.IMREAD_COLOR)
+    raw = np.fromfile(str(input_path), dtype=np.uint8)
+    image = cv2.imdecode(raw, cv2.IMREAD_COLOR)
     if image is None:
         raise FileNotFoundError(f"Could not read image: {input_path}")
 

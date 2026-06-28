@@ -54,6 +54,20 @@ def image_border_detection(width: int, height: int) -> DocumentDetection:
     return DocumentDetection(corners=corners, confidence=0.1, area_ratio=1.0, method="image_border", found=False)
 
 
+def looks_like_partial_bright_region(points: np.ndarray, width: int, height: int, area_ratio: float) -> bool:
+    ordered = order_points(points)
+    min_x = float(np.min(ordered[:, 0]))
+    max_x = float(np.max(ordered[:, 0]))
+    min_y = float(np.min(ordered[:, 1]))
+    max_y = float(np.max(ordered[:, 1]))
+    width_coverage = (max_x - min_x) / max(1.0, float(width))
+    height_coverage = (max_y - min_y) / max(1.0, float(height))
+    misses_top = min_y > height * 0.12
+    misses_bottom = max_y < height * 0.86
+    spans_width = width_coverage > 0.78
+    return spans_width and height_coverage < 0.9 and area_ratio < 0.9 and (misses_top or misses_bottom)
+
+
 def detect_bright_document_region(image: np.ndarray, max_dim: int = 900) -> DocumentDetection | None:
     bgr = ensure_bgr(image)
     height, width = bgr.shape[:2]
@@ -94,6 +108,8 @@ def detect_bright_document_region(image: np.ndarray, max_dim: int = 900) -> Docu
         right_height = np.linalg.norm(ordered[2] - ordered[1])
         min_side = min(top_width, bottom_width, left_height, right_height)
         if area_ratio < 0.12 or area_ratio > 0.96 or min_side < min(width, height) * 0.15:
+            continue
+        if looks_like_partial_bright_region(ordered, width, height, area_ratio):
             continue
 
         confidence = min(0.88, 0.28 + area_ratio * 0.55 + min(0.2, contour_area / small_area))

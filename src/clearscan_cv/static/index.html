@@ -1650,6 +1650,18 @@
         }));
       }
 
+      function shouldRejectPartialBrightQuad(points, width, height, areaRatio) {
+        const minX = Math.min(...points.map((point) => point.x));
+        const maxX = Math.max(...points.map((point) => point.x));
+        const minY = Math.min(...points.map((point) => point.y));
+        const maxY = Math.max(...points.map((point) => point.y));
+        const widthCoverage = (maxX - minX) / Math.max(1, width);
+        const heightCoverage = (maxY - minY) / Math.max(1, height);
+        const missesTop = minY > height * 0.12;
+        const missesBottom = maxY < height * 0.86;
+        return widthCoverage > 0.76 && heightCoverage < 0.9 && areaRatio < 0.9 && (missesTop || missesBottom);
+      }
+
       function detectDocumentQuad(sourceCanvas) {
         const context = sourceCanvas.getContext("2d", { willReadFrequently: true });
         const { width, height } = sourceCanvas;
@@ -1724,6 +1736,9 @@
         const rightHeight = pointDistance(expanded[1], expanded[2]);
         const minSide = Math.min(topWidth, bottomWidth, leftHeight, rightHeight);
         if (areaRatio < 0.15 || minSide < Math.min(width, height) * 0.16) {
+          return { found: false, confidence: 0, corners: null, threshold };
+        }
+        if (shouldRejectPartialBrightQuad(expanded, width, height, areaRatio)) {
           return { found: false, confidence: 0, corners: null, threshold };
         }
 
@@ -1959,6 +1974,34 @@
         return top * (1 - wy) + bottom * wy;
       }
 
+      function buildIntegralImage(values, width, height) {
+        const integral = new Float64Array((width + 1) * (height + 1));
+        for (let y = 0; y < height; y += 1) {
+          let rowSum = 0;
+          for (let x = 0; x < width; x += 1) {
+            rowSum += values[y * width + x];
+            const index = (y + 1) * (width + 1) + x + 1;
+            integral[index] = integral[index - width - 1] + rowSum;
+          }
+        }
+        return integral;
+      }
+
+      function localMeanFromIntegral(integral, width, height, x, y, radius) {
+        const x0 = Math.max(0, x - radius);
+        const y0 = Math.max(0, y - radius);
+        const x1 = Math.min(width - 1, x + radius);
+        const y1 = Math.min(height - 1, y + radius);
+        const stride = width + 1;
+        const area = (x1 - x0 + 1) * (y1 - y0 + 1);
+        const sum =
+          integral[(y1 + 1) * stride + x1 + 1] -
+          integral[y0 * stride + x1 + 1] -
+          integral[(y1 + 1) * stride + x0] +
+          integral[y0 * stride + x0];
+        return sum / Math.max(1, area);
+      }
+
       function cleanupBinaryImageData(data, width, height) {
         const pixelCount = width * height;
         const visited = new Uint8Array(pixelCount);
@@ -2106,7 +2149,7 @@
 
         for (let pixel = 0; pixel < pixelCount; pixel += 1) {
           let normalized = clamp(Math.round((normalizedLum[pixel] - low) * (255 / (high - low))), 0, 255);
-          if (backgroundLum[pixel] < 128 && rawLum[pixel] < 96) {
+          if (backgroundLum[pixel] < 92 && rawLum[pixel] < 38) {
             illuminationLum[pixel] = 255;
             normalizedLum[pixel] = 255;
             inkLum[pixel] = 0;
@@ -2126,6 +2169,9 @@
           normalizedLum[pixel] = clean;
           inkLum[pixel] = ink;
         }
+
+        const adaptiveRadius = Math.max(16, Math.round(Math.max(sourceCanvas.width, sourceCanvas.height) / 42));
+        const normalizedIntegral = buildIntegralImage(normalizedLum, sourceCanvas.width, sourceCanvas.height);
 
         for (let y = 0; y < sourceCanvas.height; y += 1) {
           for (let x = 0; x < sourceCanvas.width; x += 1) {
@@ -2158,10 +2204,19 @@
             sumSquares += sharpened * sharpened;
 
             if (renderMode === "binary") {
-              const textBody = inkLum[pixel] > 132 && normalizedGradient > 12 && sharpened < 128;
+              const localMean = localMeanFromIntegral(
+                normalizedIntegral,
+                sourceCanvas.width,
+                sourceCanvas.height,
+                x,
+                y,
+                adaptiveRadius
+              );
+              const localInk = sharpened < localMean - 13 && inkLum[pixel] > 10 && sharpened < 230;
+              const textBody = inkLum[pixel] > 118 && normalizedGradient > 8 && sharpened < 142;
               const textEdge = inkLum[pixel] > 42 && normalizedGradient > 36 && sharpened < 218;
               const deepInk = normCenter < 54 && inkLum[pixel] > 104 && normalizedGradient > 18;
-              const value = textBody || textEdge || deepInk ? 0 : 255;
+              const value = localInk || textBody || textEdge || deepInk ? 0 : 255;
               data[index] = value;
               data[index + 1] = value;
               data[index + 2] = value;
