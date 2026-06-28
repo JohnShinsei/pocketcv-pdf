@@ -30,6 +30,82 @@ def unsharp_mask(gray: np.ndarray, amount: float = 0.75, radius: float = 2.0) ->
     return cv2.addWeighted(gray, 1.0 + amount, blur, -amount, 0)
 
 
+def estimate_textline_skew(image: np.ndarray, max_angle: float = 6.0, step: float = 0.5) -> tuple[float, float]:
+    bgr = ensure_bgr(image)
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    height, width = gray.shape[:2]
+    if min(height, width) < 80:
+        return 0.0, 0.0
+
+    scale = min(1.0, 900.0 / float(max(width, height)))
+    small = cv2.resize(gray, (int(width * scale), int(height * scale)), interpolation=cv2.INTER_AREA) if scale < 1.0 else gray
+    blur = cv2.GaussianBlur(small, (3, 3), 0)
+    otsu_threshold, _ = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    dark_threshold = max(35.0, min(185.0, min(float(otsu_threshold), float(np.percentile(blur, 35))) - 2.0))
+    mask = blur <= dark_threshold
+    ys, xs = np.nonzero(mask)
+    if xs.size < small.size * 0.003:
+        return 0.0, 0.0
+
+    if xs.size > 90000:
+        stride = max(1, xs.size // 90000)
+        xs = xs[::stride]
+        ys = ys[::stride]
+
+    centered_x = xs.astype(np.float32) - small.shape[1] / 2.0
+    centered_y = ys.astype(np.float32) - small.shape[0] / 2.0
+    diagonal = int(np.ceil(np.hypot(*small.shape[:2]))) + 3
+    offset = diagonal // 2
+    angles = np.arange(-max_angle, max_angle + step * 0.5, step, dtype=np.float32)
+    best_angle = 0.0
+    best_score = -1.0
+    zero_score = 0.0
+
+    for angle in angles:
+        radians = np.deg2rad(float(angle))
+        projected_y = np.rint(centered_y * np.cos(radians) - centered_x * np.sin(radians)).astype(np.int32) + offset
+        valid = (projected_y >= 0) & (projected_y < diagonal)
+        bins = np.bincount(projected_y[valid], minlength=diagonal).astype(np.float32)
+        score = float(np.sum(bins * bins) / max(1, xs.size))
+        if abs(float(angle)) < step * 0.25:
+            zero_score = score
+        if score > best_score:
+            best_score = score
+            best_angle = float(angle)
+
+    if abs(best_angle) < 0.25:
+        return 0.0, 0.0
+
+    improvement = best_score / max(zero_score, 1.0)
+    if improvement < 1.035:
+        return 0.0, round(float(improvement), 3)
+    return round(best_angle, 3), round(float(improvement), 3)
+
+
+def rotate_image_keep_content(image: np.ndarray, angle: float) -> np.ndarray:
+    if abs(angle) < 0.25:
+        return image
+
+    height, width = image.shape[:2]
+    center = (width / 2.0, height / 2.0)
+    matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+    cos = abs(matrix[0, 0])
+    sin = abs(matrix[0, 1])
+    new_width = int(round(height * sin + width * cos))
+    new_height = int(round(height * cos + width * sin))
+    matrix[0, 2] += new_width / 2.0 - center[0]
+    matrix[1, 2] += new_height / 2.0 - center[1]
+    border_value = 255 if image.ndim == 2 else (255, 255, 255)
+    return cv2.warpAffine(image, matrix, (new_width, new_height), flags=cv2.INTER_LINEAR, borderValue=border_value)
+
+
+def deskew_by_text_lines(image: np.ndarray) -> tuple[np.ndarray, dict[str, float]]:
+    angle, confidence = estimate_textline_skew(image)
+    if abs(angle) < 0.25:
+        return image, {"angle": 0.0, "confidence": confidence}
+    return rotate_image_keep_content(image, angle), {"angle": angle, "confidence": confidence}
+
+
 def normalize_illumination(image: np.ndarray) -> np.ndarray:
     bgr = ensure_bgr(image)
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
@@ -110,7 +186,8 @@ def enhance_image(image: np.ndarray, mode: OutputMode = "color", auto_warp: bool
     bgr = ensure_bgr(image)
     detection = detect_document_corners(bgr)
     warped = four_point_transform(bgr, detection.corners) if auto_warp and detection.found else bgr.copy()
-    enhanced = normalize_illumination(warped)
+    deskewed, deskew_report = deskew_by_text_lines(warped)
+    enhanced = normalize_illumination(deskewed)
 
     if mode == "binary":
         output = to_clean_binary(enhanced)
@@ -124,9 +201,10 @@ def enhance_image(image: np.ndarray, mode: OutputMode = "color", auto_warp: bool
         "mode": mode,
         "auto_warp": auto_warp,
         "document_detection": detection.to_dict(),
-        "quality": compare_quality(warped, quality_after),
+        "deskew": deskew_report,
+        "quality": compare_quality(deskewed, quality_after),
         "output_quality": assess_quality(output),
-        "pipeline": ["document_detection", "perspective_correction", "illumination_normalization", mode],
+        "pipeline": ["document_detection", "perspective_correction", "textline_deskew", "illumination_normalization", mode],
     }
     return EnhancementResult(image=output, report=report)
 

@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from clearscan_cv.geometry import detect_bright_document_region, detect_connected_document_region, detect_document_corners  # noqa: E402
-from clearscan_cv.pipeline import enhance_image, process_file  # noqa: E402
+from clearscan_cv.pipeline import deskew_by_text_lines, enhance_image, estimate_textline_skew, process_file  # noqa: E402
 
 
 def make_synthetic_document() -> np.ndarray:
@@ -52,6 +52,18 @@ def make_connected_document_with_bright_distractor() -> np.ndarray:
     for i in range(13):
         cv2.line(image, (120, 190 + i * 34), (500, 186 + i * 34), (68, 68, 65), 2, cv2.LINE_AA)
     return image
+
+
+def make_skewed_text_page(angle: float = 3.0) -> np.ndarray:
+    image = np.full((680, 900, 3), 255, dtype=np.uint8)
+    for i in range(14):
+        y = 110 + i * 34
+        cv2.line(image, (120, y), (760, y), (35, 35, 35), 3, cv2.LINE_AA)
+        if i % 3 == 0:
+            cv2.rectangle(image, (120, y + 10), (380, y + 16), (70, 70, 70), -1)
+    center = (image.shape[1] / 2, image.shape[0] / 2)
+    matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+    return cv2.warpAffine(image, matrix, (image.shape[1], image.shape[0]), borderValue=(255, 255, 255))
 
 
 class PipelineTest(unittest.TestCase):
@@ -96,6 +108,17 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("quality", result.report)
         self.assertGreater(result.image.shape[0], 100)
         self.assertGreater(result.image.shape[1], 100)
+
+    def test_estimates_textline_skew(self) -> None:
+        page = make_skewed_text_page(3.0)
+        angle, confidence = estimate_textline_skew(page)
+        corrected, report = deskew_by_text_lines(page)
+        corrected_angle, _ = estimate_textline_skew(corrected)
+
+        self.assertAlmostEqual(abs(angle), 3.0, delta=0.75)
+        self.assertGreater(confidence, 1.03)
+        self.assertEqual(report["angle"], angle)
+        self.assertLess(abs(corrected_angle), 1.0)
 
     def test_process_file_writes_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -167,6 +190,9 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("autoFound", html)
         self.assertIn("workspaceEl.classList.toggle(\"has-ocr\"", html)
         self.assertIn("grid-template-columns: minmax(520px, 1fr) minmax(360px, 440px)", html)
+        self.assertIn("deskewCanvasByTextLines", html)
+        self.assertIn("estimateTextLineSkew", html)
+        self.assertIn("文字行傾き補正", html)
         self.assertIn("件目を上へ移動", html)
         self.assertIn("端末内でPDFを生成中", html)
         self.assertIn("PocketCV 画像処理レポート", html)
@@ -175,7 +201,15 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("CompressionStream", html)
         self.assertIn("/FlateDecode", html)
         self.assertIn("/Info", html)
-        self.assertIn("navigator.mediaDevices", html)
+        self.assertIn('id="camera-file"', html)
+        self.assertIn('capture="environment"', html)
+        self.assertIn('<input id="file" class="file" type="file" accept="image/*" multiple />', html)
+        self.assertIn("アルバムから選択", html)
+        self.assertIn("openCameraCapture", html)
+        self.assertNotIn("getUserMedia", html)
+        self.assertNotIn("navigator.mediaDevices", html)
+        self.assertNotIn("<video", html)
+        self.assertNotIn("撮影して追加", html)
         self.assertIn("navigator.share", html)
         self.assertIn("serviceWorker", html)
         self.assertIn("beforeinstallprompt", html)

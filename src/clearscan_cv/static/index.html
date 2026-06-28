@@ -16,7 +16,6 @@
         --accent: #157f72;
         --accent-dark: #0f5f56;
         --warn: #b73e6f;
-        --sun: #d9892b;
         --shadow: 0 16px 45px rgba(26, 34, 44, 0.12);
       }
 
@@ -109,46 +108,36 @@
         font-weight: 700;
       }
 
-      .camera {
+      .intake {
         border: 1px solid var(--line);
         border-radius: 8px;
-        background: #0f1217;
-        overflow: hidden;
-        position: relative;
-        min-height: 360px;
+        background: #ffffff;
+        min-height: 280px;
         box-shadow: var(--shadow);
-      }
-
-      video,
-      canvas {
-        width: 100%;
-        height: 100%;
-        min-height: 360px;
-        display: block;
-        object-fit: cover;
-        background: #0f1217;
-      }
-
-      .empty {
-        position: absolute;
-        inset: 0;
         display: grid;
-        place-items: center;
-        text-align: center;
-        color: #dfe7f0;
-        padding: 24px;
+        align-content: center;
+        gap: 16px;
+        padding: 22px;
       }
 
-      .empty strong {
-        display: block;
-        margin-bottom: 8px;
-        font-size: 20px;
+      .intake-title {
+        margin: 0;
+        font-size: 21px;
+        line-height: 1.2;
       }
 
-      .empty span {
-        color: #aeb9c6;
-        line-height: 1.45;
+      .intake-copy {
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
         font-weight: 800;
+        line-height: 1.55;
+      }
+
+      .intake-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
       }
 
       .privacy-note {
@@ -185,12 +174,6 @@
         gap: 10px;
       }
 
-      .control-row {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 10px;
-      }
-
       button,
       .file-button {
         min-height: 48px;
@@ -222,13 +205,6 @@
 
       .primary:active {
         background: var(--accent-dark);
-      }
-
-      .capture {
-        min-height: 58px;
-        border-color: var(--sun);
-        background: var(--sun);
-        color: #1b1408;
       }
 
       .danger {
@@ -623,15 +599,13 @@
         }
 
         .brand,
-        .camera,
+        .intake,
         .controls {
           min-width: 0;
         }
 
-        .camera,
-        video,
-        canvas {
-          min-height: 58vh;
+        .intake {
+          min-height: 0;
         }
 
         .workspace {
@@ -715,14 +689,16 @@
           </label>
         </div>
 
-        <div class="camera">
-          <video id="video" autoplay playsinline muted></video>
-          <canvas id="canvas" hidden></canvas>
-          <div id="empty" class="empty">
-            <div>
-              <strong>カメラ待機中</strong>
-              <span>撮影または画像追加で処理を開始</span>
-            </div>
+        <div class="intake">
+          <div>
+            <h2 class="intake-title">スキャン画像を追加</h2>
+            <p class="intake-copy">撮影は端末のカメラ画面を直接開きます。アルバム選択では写真ライブラリだけを開きます。</p>
+          </div>
+          <div class="intake-actions">
+            <button id="start" class="primary" type="button">撮影する</button>
+            <label class="file-button" for="file">アルバムから選択</label>
+            <input id="camera-file" class="file" type="file" accept="image/*" capture="environment" />
+            <input id="file" class="file" type="file" accept="image/*" multiple />
           </div>
         </div>
 
@@ -732,13 +708,7 @@
             <span>PDFファイル名</span>
             <input id="filename" class="filename-input" type="text" value="pocketcv-scan" autocomplete="off" />
           </label>
-          <button id="start" type="button">カメラ起動</button>
-          <button id="capture" class="capture" type="button" disabled>撮影して追加</button>
-          <div class="control-row">
-            <label class="file-button" for="file">画像を追加</label>
-            <input id="file" class="file" type="file" accept="image/*" capture="environment" multiple />
-            <button id="clear" class="danger" type="button" disabled>クリア</button>
-          </div>
+          <button id="clear" class="danger" type="button" disabled>クリア</button>
           <button id="pdf" class="primary" type="button" disabled>スキャンPDFを生成</button>
         </div>
       </aside>
@@ -821,7 +791,6 @@
 
       const state = {
         pages: [],
-        stream: null,
         pdfUrl: null,
         pdfBlob: null,
         pdfName: "",
@@ -843,11 +812,8 @@
         draggingIndex: -1,
       };
 
-      const video = document.querySelector("#video");
-      const canvas = document.querySelector("#canvas");
-      const empty = document.querySelector("#empty");
       const startButton = document.querySelector("#start");
-      const captureButton = document.querySelector("#capture");
+      const cameraFileInput = document.querySelector("#camera-file");
       const fileInput = document.querySelector("#file");
       const clearButton = document.querySelector("#clear");
       const pdfButton = document.querySelector("#pdf");
@@ -897,7 +863,7 @@
       function setBusy(value) {
         state.busy = value;
         startButton.disabled = value;
-        captureButton.disabled = value || !state.stream;
+        cameraFileInput.disabled = value;
         fileInput.disabled = value;
         clearButton.disabled = value || state.pages.length === 0;
         pdfButton.disabled = value || state.pages.length === 0;
@@ -974,6 +940,13 @@
           return `${Math.round((bytes / 1024 / 1024) * 10) / 10} MB`;
         }
         return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+      }
+
+      function formatSkewAngle(angle) {
+        if (!Number.isFinite(angle) || Math.abs(angle) < 0.25) {
+          return "傾き 0°";
+        }
+        return `傾き ${Math.round(angle * 10) / 10}°`;
       }
 
       function cloneCorners(corners) {
@@ -1102,7 +1075,7 @@
                 page.metrics.perspectiveConfidence * 100
               )}% · エッジ ${
                 Math.round(page.metrics.edgeDensity * 1000) / 10
-              }%`
+              }% · ${formatSkewAngle(page.metrics.deskewAngle)}`
             : "端末内で処理済み";
 
           item.append(image, footer, meta);
@@ -2153,6 +2126,115 @@
         return output;
       }
 
+      function estimateTextLineSkew(sourceCanvas) {
+        const { width, height } = sourceCanvas;
+        if (Math.min(width, height) < 80) {
+          return { angle: 0, confidence: 0 };
+        }
+
+        const context = sourceCanvas.getContext("2d", { willReadFrequently: true });
+        const image = context.getImageData(0, 0, width, height);
+        const data = image.data;
+        const step = Math.max(1, Math.floor(Math.max(width, height) / 900));
+        const histogram = new Array(256).fill(0);
+        let samples = 0;
+        for (let y = 0; y < height; y += step) {
+          for (let x = 0; x < width; x += step) {
+            const index = (y * width + x) * 4;
+            const value = Math.round(luminance(data[index], data[index + 1], data[index + 2]));
+            histogram[value] += 1;
+            samples += 1;
+          }
+        }
+
+        const darkThreshold = clamp(Math.min(otsuThreshold(histogram, samples), percentileFromHistogram(histogram, samples, 0.35)) - 2, 35, 185);
+        const points = [];
+        const pointLimit = 90000;
+        const pointStep = Math.max(step, Math.floor(Math.sqrt((width * height) / pointLimit)));
+        for (let y = 0; y < height; y += pointStep) {
+          for (let x = 0; x < width; x += pointStep) {
+            const index = (y * width + x) * 4;
+            if (luminance(data[index], data[index + 1], data[index + 2]) <= darkThreshold) {
+              points.push({ x: x - width / 2, y: y - height / 2 });
+            }
+          }
+        }
+
+        if (points.length < (width * height) / (pointStep * pointStep) * 0.003) {
+          return { angle: 0, confidence: 0 };
+        }
+
+        const diagonal = Math.ceil(Math.hypot(width, height)) + 3;
+        const offset = Math.floor(diagonal / 2);
+        let bestAngle = 0;
+        let bestScore = -1;
+        let zeroScore = 0;
+        for (let angle = -6; angle <= 6.0001; angle += 0.5) {
+          const radians = (angle * Math.PI) / 180;
+          const cos = Math.cos(radians);
+          const sin = Math.sin(radians);
+          const bins = new Uint32Array(diagonal);
+          points.forEach((point) => {
+            const projectedY = Math.round(point.y * cos - point.x * sin) + offset;
+            if (projectedY >= 0 && projectedY < diagonal) {
+              bins[projectedY] += 1;
+            }
+          });
+
+          let score = 0;
+          for (let index = 0; index < bins.length; index += 1) {
+            score += bins[index] * bins[index];
+          }
+          score /= Math.max(1, points.length);
+          if (Math.abs(angle) < 0.01) {
+            zeroScore = score;
+          }
+          if (score > bestScore) {
+            bestScore = score;
+            bestAngle = angle;
+          }
+        }
+
+        const confidence = bestScore / Math.max(zeroScore, 1);
+        if (Math.abs(bestAngle) < 0.25 || confidence < 1.035) {
+          return { angle: 0, confidence: Math.round(confidence * 1000) / 1000 };
+        }
+        return { angle: Math.round(bestAngle * 1000) / 1000, confidence: Math.round(confidence * 1000) / 1000 };
+      }
+
+      function rotateCanvasKeepContent(sourceCanvas, angle) {
+        if (Math.abs(angle) < 0.25) {
+          return sourceCanvas;
+        }
+
+        const radians = (angle * Math.PI) / 180;
+        const sin = Math.abs(Math.sin(radians));
+        const cos = Math.abs(Math.cos(radians));
+        const width = Math.max(1, Math.round(sourceCanvas.width * cos + sourceCanvas.height * sin));
+        const height = Math.max(1, Math.round(sourceCanvas.width * sin + sourceCanvas.height * cos));
+        const output = document.createElement("canvas");
+        output.width = width;
+        output.height = height;
+        const context = output.getContext("2d");
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, width, height);
+        context.translate(width / 2, height / 2);
+        context.rotate(radians);
+        context.drawImage(sourceCanvas, -sourceCanvas.width / 2, -sourceCanvas.height / 2);
+        return output;
+      }
+
+      function deskewCanvasByTextLines(sourceCanvas, detection) {
+        const deskew = estimateTextLineSkew(sourceCanvas);
+        if (Math.abs(deskew.angle) < 0.25) {
+          return { canvas: sourceCanvas, detection: { ...detection, deskewAngle: 0, deskewConfidence: deskew.confidence } };
+        }
+        return {
+          canvas: rotateCanvasKeepContent(sourceCanvas, deskew.angle),
+          detection: { ...detection, deskewAngle: deskew.angle, deskewConfidence: deskew.confidence },
+        };
+      }
+
       function perspectiveCorrectCanvas(sourceCanvas, manualCorners = null) {
         const detection = detectDocumentQuad(sourceCanvas);
         const selectedCorners = manualCorners || (detection.found ? detection.corners : null);
@@ -2612,6 +2694,8 @@
             contrast,
             brightness: mean,
             threshold,
+            deskewAngle: detection.deskewAngle || 0,
+            deskewConfidence: detection.deskewConfidence || 0,
           },
         };
       }
@@ -2660,6 +2744,7 @@
         const rows = [
           ["総合品質", `${Math.round(metrics.qualityScore)} / 100`],
           ["透視補正信頼度", `${Math.round(metrics.perspectiveConfidence * 100)}%`],
+          ["文字行傾き補正", `${Math.round((metrics.deskewAngle || 0) * 10) / 10}°`],
           ["エッジ密度", `${Math.round(metrics.edgeDensity * 1000) / 10}%`],
           ["コントラスト", `${Math.round(metrics.contrast * 10) / 10}`],
           ["二値化しきい値", `${metrics.threshold}`],
@@ -2689,7 +2774,8 @@
       async function processSourceCanvas(sourceCanvas, sourceBlob, name, manualCorners = null) {
         const renderMode = modeEl.value;
         const corrected = perspectiveCorrectCanvas(sourceCanvas, manualCorners);
-        const enhanced = enhanceCanvas(corrected.canvas, renderMode, corrected.detection);
+        const deskewed = deskewCanvasByTextLines(corrected.canvas, corrected.detection);
+        const enhanced = enhanceCanvas(deskewed.canvas, renderMode, deskewed.detection);
         const processedCanvas =
           renderMode === "report" ? buildAnalysisCanvas(sourceCanvas, enhanced.canvas, enhanced.edgeCanvas, enhanced.metrics) : enhanced.canvas;
         const processedBlob = await canvasToBlob(processedCanvas, "image/jpeg", 0.92);
@@ -2969,43 +3055,8 @@
         }
       });
 
-      async function startCamera() {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          setStatus("この端末では画像追加を使用してください。", true);
-          return;
-        }
-
-        setBusy(true);
-        try {
-          state.stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              facingMode: { ideal: "environment" },
-              width: { ideal: 1920 },
-              height: { ideal: 2560 },
-            },
-            audio: false,
-          });
-          video.srcObject = state.stream;
-          empty.hidden = true;
-          setBusy(false);
-          updateStatus();
-        } catch (error) {
-          state.stream = null;
-          setBusy(false);
-          setStatus("カメラプレビューを利用できません。画像追加を使用してください。", true);
-        }
-      }
-
-      async function capturePage() {
-        if (!state.stream || !video.videoWidth) {
-          return;
-        }
-
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
-        const blob = await canvasToBlob(canvas, "image/jpeg", 0.94);
-        await addBlob(blob, `capture-${Date.now()}.jpg`);
+      function openCameraCapture() {
+        cameraFileInput.click();
       }
 
       function textBytes(text) {
@@ -3318,8 +3369,7 @@
         }
       }
 
-      startButton.addEventListener("click", startCamera);
-      captureButton.addEventListener("click", capturePage);
+      startButton.addEventListener("click", openCameraCapture);
       pdfButton.addEventListener("click", generatePdf);
       shareButton.addEventListener("click", sharePdf);
       installButton.addEventListener("click", promptInstall);
@@ -3353,6 +3403,14 @@
         refreshPages();
       });
 
+      cameraFileInput.addEventListener("change", async () => {
+        const files = Array.from(cameraFileInput.files || []);
+        cameraFileInput.value = "";
+        for (const file of files) {
+          await addBlob(file, file.name || `capture-${Date.now()}.jpg`);
+        }
+      });
+
       fileInput.addEventListener("change", async () => {
         const files = Array.from(fileInput.files || []);
         fileInput.value = "";
@@ -3360,10 +3418,6 @@
           await addBlob(file, file.name || `page-${Date.now()}.jpg`);
         }
       });
-
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        startButton.disabled = true;
-      }
 
       refreshPages();
     </script>
