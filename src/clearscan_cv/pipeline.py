@@ -1,0 +1,137 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+from pathlib import Path
+from typing import Literal
+
+import cv2
+import numpy as np
+
+from .geometry import detect_document_corners, ensure_bgr, four_point_transform
+from .quality import assess_quality, compare_quality
+
+OutputMode = Literal["color", "gray", "binary"]
+
+
+@dataclass
+class EnhancementResult:
+    image: np.ndarray
+    report: dict[str, object]
+
+
+def _odd_kernel(size: int, minimum: int = 15, maximum: int = 99) -> int:
+    size = max(minimum, min(maximum, size))
+    return size + 1 if size % 2 == 0 else size
+
+
+def normalize_illumination(image: np.ndarray) -> np.ndarray:
+    bgr = ensure_bgr(image)
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+    lightness, channel_a, channel_b = cv2.split(lab)
+
+    h, w = lightness.shape[:2]
+    kernel = _odd_kernel(int(min(h, w) / 24), minimum=21, maximum=81)
+    background = cv2.medianBlur(cv2.dilate(lightness, np.ones((7, 7), dtype=np.uint8)), kernel)
+    corrected = 255 - cv2.absdiff(lightness, background)
+    corrected = cv2.normalize(corrected, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
+
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    corrected = clahe.apply(corrected)
+    merged = cv2.merge((corrected, channel_a, channel_b))
+    return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+
+
+def to_clean_binary(image: np.ndarray) -> np.ndarray:
+    bgr = ensure_bgr(image)
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape[:2]
+    block_size = _odd_kernel(int(min(h, w) / 18), minimum=21, maximum=61)
+    binary = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        block_size,
+        11,
+    )
+    return cv2.morphologyEx(binary, cv2.MORPH_OPEN, np.ones((2, 2), dtype=np.uint8))
+
+
+def build_side_by_side(original: np.ndarray, processed: np.ndarray) -> np.ndarray:
+    left = ensure_bgr(original)
+    right = ensure_bgr(processed)
+    target_height = max(left.shape[0], right.shape[0])
+
+    def resize_to_height(image: np.ndarray) -> np.ndarray:
+        scale = target_height / image.shape[0]
+        return cv2.resize(image, (int(image.shape[1] * scale), target_height), interpolation=cv2.INTER_AREA)
+
+    left = resize_to_height(left)
+    right = resize_to_height(right)
+    gap = np.full((target_height, 18, 3), 245, dtype=np.uint8)
+    return cv2.hconcat([left, gap, right])
+
+
+def enhance_image(image: np.ndarray, mode: OutputMode = "color", auto_warp: bool = True) -> EnhancementResult:
+    if mode not in {"color", "gray", "binary"}:
+        raise ValueError("mode must be one of: color, gray, binary")
+
+    bgr = ensure_bgr(image)
+    detection = detect_document_corners(bgr)
+    warped = four_point_transform(bgr, detection.corners) if auto_warp and detection.found else bgr.copy()
+    enhanced = normalize_illumination(warped)
+
+    if mode == "binary":
+        output = to_clean_binary(enhanced)
+    elif mode == "gray":
+        output = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
+    else:
+        output = enhanced
+
+    quality_after = enhanced if mode == "binary" else output
+    report = {
+        "mode": mode,
+        "auto_warp": auto_warp,
+        "document_detection": detection.to_dict(),
+        "quality": compare_quality(warped, quality_after),
+        "output_quality": assess_quality(output),
+        "pipeline": ["document_detection", "perspective_correction", "illumination_normalization", mode],
+    }
+    return EnhancementResult(image=output, report=report)
+
+
+def process_file(
+    input_path: str | Path,
+    output_dir: str | Path = "outputs",
+    mode: OutputMode = "color",
+    auto_warp: bool = True,
+    side_by_side: bool = False,
+) -> dict[str, object]:
+    input_path = Path(input_path)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    image = cv2.imread(str(input_path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise FileNotFoundError(f"Could not read image: {input_path}")
+
+    result = enhance_image(image, mode=mode, auto_warp=auto_warp)
+    output_path = output_dir / f"{input_path.stem}_clearscan.png"
+    report_path = output_dir / f"{input_path.stem}_report.json"
+    cv2.imwrite(str(output_path), result.image)
+
+    report = {
+        "input_path": str(input_path),
+        "output_path": str(output_path),
+        "report_path": str(report_path),
+        **result.report,
+    }
+
+    if side_by_side:
+        compare_path = output_dir / f"{input_path.stem}_comparison.png"
+        cv2.imwrite(str(compare_path), build_side_by_side(image, result.image))
+        report["comparison_path"] = str(compare_path)
+
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return report

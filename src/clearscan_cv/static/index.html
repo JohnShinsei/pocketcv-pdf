@@ -1,0 +1,1262 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="data:," />
+    <title>PocketCV PDF</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #17202a;
+        --muted: #687386;
+        --line: #d9dee8;
+        --surface: #f6f8fb;
+        --accent: #157f72;
+        --accent-dark: #0f5f56;
+        --warn: #b73e6f;
+        --sun: #d9892b;
+        --shadow: 0 16px 45px rgba(26, 34, 44, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: var(--ink);
+        background: #ffffff;
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      .app {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: minmax(320px, 430px) 1fr;
+      }
+
+      .panel {
+        min-height: 100vh;
+        padding: max(22px, env(safe-area-inset-top)) 22px max(22px, env(safe-area-inset-bottom));
+        border-right: 1px solid var(--line);
+        background: var(--surface);
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        gap: 18px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 26px;
+        line-height: 1.05;
+      }
+
+      .mode {
+        width: auto;
+        min-width: 116px;
+        min-height: 40px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 10px;
+        background: #ffffff;
+        color: var(--ink);
+        font-weight: 700;
+      }
+
+      .camera {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #0f1217;
+        overflow: hidden;
+        position: relative;
+        min-height: 460px;
+        box-shadow: var(--shadow);
+      }
+
+      video,
+      canvas {
+        width: 100%;
+        height: 100%;
+        min-height: 460px;
+        display: block;
+        object-fit: cover;
+        background: #0f1217;
+      }
+
+      .empty {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        color: #dfe7f0;
+        padding: 24px;
+      }
+
+      .empty strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 18px;
+      }
+
+      .empty span {
+        color: #aeb9c6;
+        line-height: 1.45;
+      }
+
+      .controls {
+        display: grid;
+        gap: 10px;
+      }
+
+      .control-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+
+      button,
+      .file-button {
+        min-height: 48px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 11px 14px;
+        background: #ffffff;
+        color: var(--ink);
+        font-weight: 800;
+        cursor: pointer;
+        display: inline-grid;
+        place-items: center;
+        text-align: center;
+      }
+
+      button:disabled {
+        opacity: 0.48;
+        cursor: not-allowed;
+      }
+
+      .primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: #ffffff;
+      }
+
+      .primary:active {
+        background: var(--accent-dark);
+      }
+
+      .capture {
+        min-height: 58px;
+        border-color: var(--sun);
+        background: var(--sun);
+        color: #1b1408;
+      }
+
+      .danger {
+        border-color: #f0c5d5;
+        color: var(--warn);
+      }
+
+      .file {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .workspace {
+        padding: 22px;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        gap: 18px;
+        min-width: 0;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .status {
+        color: var(--muted);
+        font-weight: 700;
+        min-height: 24px;
+      }
+
+      .download {
+        color: var(--accent);
+        font-weight: 900;
+        text-decoration: none;
+      }
+
+      .pages {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 14px;
+        align-content: start;
+      }
+
+      .page {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: #ffffff;
+      }
+
+      .page img {
+        width: 100%;
+        aspect-ratio: 3 / 4;
+        object-fit: cover;
+        display: block;
+        background: #eef1f5;
+      }
+
+      .page-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 10px;
+      }
+
+      .page-footer span {
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .page-meta {
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 1.35;
+        padding: 0 10px 10px;
+      }
+
+      .mini {
+        min-height: 34px;
+        width: 34px;
+        padding: 0;
+        border-radius: 8px;
+      }
+
+      .placeholder {
+        min-height: 360px;
+        border: 1px dashed var(--line);
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        color: var(--muted);
+        font-weight: 800;
+        text-align: center;
+        padding: 24px;
+      }
+
+      @media (max-width: 860px) {
+        .app {
+          grid-template-columns: 1fr;
+        }
+
+        .panel {
+          min-height: auto;
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .camera,
+        video,
+        canvas {
+          min-height: 58vh;
+        }
+
+        .workspace {
+          padding: 16px;
+        }
+
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <aside class="panel">
+        <div class="brand">
+          <h1>PocketCV PDF</h1>
+          <select id="mode" class="mode" aria-label="Scan mode">
+            <option value="report">CV report</option>
+            <option value="color">Enhanced</option>
+            <option value="gray">Gray</option>
+            <option value="binary">Binary</option>
+            <option value="edges">Edges</option>
+          </select>
+        </div>
+
+        <div class="camera">
+          <video id="video" autoplay playsinline muted></video>
+          <canvas id="canvas" hidden></canvas>
+          <div id="empty" class="empty">
+            <div>
+              <strong>Camera ready</strong>
+              <span>On-device scan to PDF</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="controls">
+          <button id="start" type="button">Start camera</button>
+          <button id="capture" class="capture" type="button" disabled>Capture page</button>
+          <div class="control-row">
+            <label class="file-button" for="file">Add page</label>
+            <input id="file" class="file" type="file" accept="image/*" capture="environment" multiple />
+            <button id="clear" class="danger" type="button" disabled>Clear</button>
+          </div>
+          <button id="pdf" class="primary" type="button" disabled>Generate PDF</button>
+        </div>
+      </aside>
+
+      <section class="workspace">
+        <div class="topbar">
+          <div id="status" class="status">0 pages - on device</div>
+          <a id="download" class="download" hidden download="clearscan-scan.pdf">Download PDF</a>
+        </div>
+        <div id="pages" class="pages">
+          <div class="placeholder">No pages captured</div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const MAX_IMAGE_DIMENSION = 1800;
+      const A4_WIDTH = 595.28;
+      const A4_HEIGHT = 841.89;
+      const PAGE_MARGIN = 24;
+
+      const state = {
+        pages: [],
+        stream: null,
+        pdfUrl: null,
+        busy: false,
+      };
+
+      const video = document.querySelector("#video");
+      const canvas = document.querySelector("#canvas");
+      const empty = document.querySelector("#empty");
+      const startButton = document.querySelector("#start");
+      const captureButton = document.querySelector("#capture");
+      const fileInput = document.querySelector("#file");
+      const clearButton = document.querySelector("#clear");
+      const pdfButton = document.querySelector("#pdf");
+      const pagesEl = document.querySelector("#pages");
+      const statusEl = document.querySelector("#status");
+      const downloadEl = document.querySelector("#download");
+      const modeEl = document.querySelector("#mode");
+
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+      }
+
+      function setBusy(value) {
+        state.busy = value;
+        startButton.disabled = value;
+        captureButton.disabled = value || !state.stream;
+        fileInput.disabled = value;
+        clearButton.disabled = value || state.pages.length === 0;
+        pdfButton.disabled = value || state.pages.length === 0;
+      }
+
+      function setStatus(message, isError = false) {
+        statusEl.textContent = message;
+        statusEl.style.color = isError ? "var(--warn)" : "var(--muted)";
+      }
+
+      function updateStatus() {
+        const count = state.pages.length;
+        setStatus(`${count} page${count === 1 ? "" : "s"} - on device`);
+      }
+
+      function revokePdfUrl() {
+        if (state.pdfUrl) {
+          URL.revokeObjectURL(state.pdfUrl);
+          state.pdfUrl = null;
+        }
+        downloadEl.hidden = true;
+        downloadEl.removeAttribute("href");
+      }
+
+      function refreshPages() {
+        pagesEl.innerHTML = "";
+        if (!state.pages.length) {
+          const placeholder = document.createElement("div");
+          placeholder.className = "placeholder";
+          placeholder.textContent = "No pages captured";
+          pagesEl.appendChild(placeholder);
+        }
+
+        state.pages.forEach((page, index) => {
+          const item = document.createElement("article");
+          item.className = "page";
+
+          const image = document.createElement("img");
+          image.src = page.previewUrl;
+          image.alt = `Page ${index + 1}`;
+
+          const footer = document.createElement("div");
+          footer.className = "page-footer";
+
+          const label = document.createElement("span");
+          label.textContent = `Page ${index + 1}`;
+
+          const remove = document.createElement("button");
+          remove.className = "mini danger";
+          remove.type = "button";
+          remove.textContent = "x";
+          remove.ariaLabel = `Remove page ${index + 1}`;
+          remove.addEventListener("click", () => {
+            URL.revokeObjectURL(page.previewUrl);
+            state.pages.splice(index, 1);
+            revokePdfUrl();
+            refreshPages();
+          });
+
+          footer.append(label, remove);
+          const meta = document.createElement("div");
+          meta.className = "page-meta";
+          meta.textContent = page.metrics
+            ? `Perspective ${Math.round(page.metrics.perspectiveConfidence * 100)}% · Edges ${Math.round(page.metrics.edgeDensity * 1000) / 10}%`
+            : "Processed locally";
+
+          item.append(image, footer, meta);
+          pagesEl.appendChild(item);
+        });
+
+        updateStatus();
+        setBusy(false);
+      }
+
+      function dataUrlToBlob(dataUrl) {
+        const [metadata, data] = dataUrl.split(",");
+        const mime = metadata.match(/data:(.*);base64/)[1];
+        const binary = atob(data);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        return new Blob([bytes], { type: mime });
+      }
+
+      function canvasToBlob(sourceCanvas, type = "image/jpeg", quality = 0.92) {
+        return new Promise((resolve, reject) => {
+          if (sourceCanvas.toBlob) {
+            sourceCanvas.toBlob((blob) => {
+              if (blob) {
+                resolve(blob);
+              } else {
+                reject(new Error("Canvas export failed."));
+              }
+            }, type, quality);
+            return;
+          }
+
+          try {
+            resolve(dataUrlToBlob(sourceCanvas.toDataURL(type, quality)));
+          } catch (error) {
+            reject(error);
+          }
+        });
+      }
+
+      function loadImage(blob) {
+        if ("createImageBitmap" in window) {
+          return createImageBitmap(blob, { imageOrientation: "from-image" }).catch(() => createImageBitmap(blob));
+        }
+
+        return new Promise((resolve, reject) => {
+          const url = URL.createObjectURL(blob);
+          const image = new Image();
+          image.onload = () => {
+            URL.revokeObjectURL(url);
+            resolve(image);
+          };
+          image.onerror = () => {
+            URL.revokeObjectURL(url);
+            reject(new Error("Could not load image."));
+          };
+          image.src = url;
+        });
+      }
+
+      function drawImageToCanvas(image) {
+        const width = image.width || image.naturalWidth;
+        const height = image.height || image.naturalHeight;
+        const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(width, height));
+        const output = document.createElement("canvas");
+        output.width = Math.max(1, Math.round(width * scale));
+        output.height = Math.max(1, Math.round(height * scale));
+        output.getContext("2d").drawImage(image, 0, 0, output.width, output.height);
+        return output;
+      }
+
+      function luminance(r, g, b) {
+        return 0.299 * r + 0.587 * g + 0.114 * b;
+      }
+
+      function pointDistance(a, b) {
+        return Math.hypot(a.x - b.x, a.y - b.y);
+      }
+
+      function polygonArea(points) {
+        let area = 0;
+        for (let i = 0; i < points.length; i += 1) {
+          const current = points[i];
+          const next = points[(i + 1) % points.length];
+          area += current.x * next.y - next.x * current.y;
+        }
+        return Math.abs(area) / 2;
+      }
+
+      function expandQuad(points, width, height, ratio = 0.018) {
+        const center = points.reduce((sum, point) => ({ x: sum.x + point.x / points.length, y: sum.y + point.y / points.length }), {
+          x: 0,
+          y: 0,
+        });
+        return points.map((point) => ({
+          x: clamp(center.x + (point.x - center.x) * (1 + ratio), 0, width - 1),
+          y: clamp(center.y + (point.y - center.y) * (1 + ratio), 0, height - 1),
+        }));
+      }
+
+      function detectDocumentQuad(sourceCanvas) {
+        const context = sourceCanvas.getContext("2d", { willReadFrequently: true });
+        const { width, height } = sourceCanvas;
+        const image = context.getImageData(0, 0, width, height);
+        const data = image.data;
+        const step = Math.max(1, Math.floor(Math.max(width, height) / 760));
+
+        let sum = 0;
+        let sumSquares = 0;
+        let samples = 0;
+        const histogram = new Array(256).fill(0);
+        for (let y = 0; y < height; y += step) {
+          for (let x = 0; x < width; x += step) {
+            const index = (y * width + x) * 4;
+            const value = luminance(data[index], data[index + 1], data[index + 2]);
+            sum += value;
+            sumSquares += value * value;
+            histogram[Math.round(value)] += 1;
+            samples += 1;
+          }
+        }
+
+        const mean = sum / Math.max(1, samples);
+        const variance = sumSquares / Math.max(1, samples) - mean * mean;
+        const threshold = clamp(
+          Math.max(percentileFromHistogram(histogram, samples, 0.62), mean + Math.sqrt(Math.max(0, variance)) * 0.1),
+          95,
+          238
+        );
+
+        const extremes = {
+          topLeft: { score: Infinity, point: null },
+          topRight: { score: -Infinity, point: null },
+          bottomRight: { score: -Infinity, point: null },
+          bottomLeft: { score: Infinity, point: null },
+        };
+
+        let hits = 0;
+        for (let y = 0; y < height; y += step) {
+          for (let x = 0; x < width; x += step) {
+            const index = (y * width + x) * 4;
+            if (luminance(data[index], data[index + 1], data[index + 2]) > threshold) {
+              const sumScore = x + y;
+              const diffScore = x - y;
+              if (sumScore < extremes.topLeft.score) {
+                extremes.topLeft = { score: sumScore, point: { x, y } };
+              }
+              if (diffScore > extremes.topRight.score) {
+                extremes.topRight = { score: diffScore, point: { x, y } };
+              }
+              if (sumScore > extremes.bottomRight.score) {
+                extremes.bottomRight = { score: sumScore, point: { x, y } };
+              }
+              if (diffScore < extremes.bottomLeft.score) {
+                extremes.bottomLeft = { score: diffScore, point: { x, y } };
+              }
+              hits += 1;
+            }
+          }
+        }
+
+        const corners = [extremes.topLeft.point, extremes.topRight.point, extremes.bottomRight.point, extremes.bottomLeft.point];
+        if (hits < samples * 0.04 || corners.some((point) => !point)) {
+          return { found: false, confidence: 0, corners: null, threshold };
+        }
+
+        const expanded = expandQuad(corners, width, height);
+        const areaRatio = polygonArea(expanded) / (width * height);
+        const topWidth = pointDistance(expanded[0], expanded[1]);
+        const bottomWidth = pointDistance(expanded[3], expanded[2]);
+        const leftHeight = pointDistance(expanded[0], expanded[3]);
+        const rightHeight = pointDistance(expanded[1], expanded[2]);
+        const minSide = Math.min(topWidth, bottomWidth, leftHeight, rightHeight);
+        if (areaRatio < 0.15 || minSide < Math.min(width, height) * 0.16) {
+          return { found: false, confidence: 0, corners: null, threshold };
+        }
+
+        return {
+          found: true,
+          confidence: clamp(areaRatio * 1.35 + Math.min(hits / samples, 0.55), 0.1, 0.98),
+          corners: expanded,
+          threshold,
+        };
+      }
+
+      function solveLinearSystem(matrix, values) {
+        const size = values.length;
+        const a = matrix.map((row, index) => row.concat(values[index]));
+
+        for (let col = 0; col < size; col += 1) {
+          let pivot = col;
+          for (let row = col + 1; row < size; row += 1) {
+            if (Math.abs(a[row][col]) > Math.abs(a[pivot][col])) {
+              pivot = row;
+            }
+          }
+
+          if (Math.abs(a[pivot][col]) < 1e-9) {
+            throw new Error("Perspective solve failed.");
+          }
+
+          [a[col], a[pivot]] = [a[pivot], a[col]];
+          const divisor = a[col][col];
+          for (let item = col; item <= size; item += 1) {
+            a[col][item] /= divisor;
+          }
+
+          for (let row = 0; row < size; row += 1) {
+            if (row === col) {
+              continue;
+            }
+            const factor = a[row][col];
+            for (let item = col; item <= size; item += 1) {
+              a[row][item] -= factor * a[col][item];
+            }
+          }
+        }
+
+        return a.map((row) => row[size]);
+      }
+
+      function perspectiveCoefficients(corners, width, height) {
+        const destination = [
+          { x: 0, y: 0 },
+          { x: width - 1, y: 0 },
+          { x: width - 1, y: height - 1 },
+          { x: 0, y: height - 1 },
+        ];
+        const matrix = [];
+        const values = [];
+
+        for (let i = 0; i < 4; i += 1) {
+          const u = destination[i].x;
+          const v = destination[i].y;
+          const x = corners[i].x;
+          const y = corners[i].y;
+          matrix.push([u, v, 1, 0, 0, 0, -u * x, -v * x]);
+          values.push(x);
+          matrix.push([0, 0, 0, u, v, 1, -u * y, -v * y]);
+          values.push(y);
+        }
+
+        return solveLinearSystem(matrix, values);
+      }
+
+      function sampleBilinear(data, width, height, x, y, channel) {
+        if (x < 0 || y < 0 || x >= width - 1 || y >= height - 1) {
+          return 255;
+        }
+        const x0 = Math.floor(x);
+        const y0 = Math.floor(y);
+        const xWeight = x - x0;
+        const yWeight = y - y0;
+        const index00 = (y0 * width + x0) * 4 + channel;
+        const index10 = index00 + 4;
+        const index01 = index00 + width * 4;
+        const index11 = index01 + 4;
+        const top = data[index00] * (1 - xWeight) + data[index10] * xWeight;
+        const bottom = data[index01] * (1 - xWeight) + data[index11] * xWeight;
+        return top * (1 - yWeight) + bottom * yWeight;
+      }
+
+      function warpPerspectiveCanvas(sourceCanvas, corners) {
+        const targetWidth = Math.max(80, Math.round(Math.max(pointDistance(corners[0], corners[1]), pointDistance(corners[3], corners[2]))));
+        const targetHeight = Math.max(80, Math.round(Math.max(pointDistance(corners[0], corners[3]), pointDistance(corners[1], corners[2]))));
+        const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(targetWidth, targetHeight));
+        const width = Math.max(1, Math.round(targetWidth * scale));
+        const height = Math.max(1, Math.round(targetHeight * scale));
+        const scaledCorners = corners.map((point) => ({ x: point.x, y: point.y }));
+        const coefficients = perspectiveCoefficients(scaledCorners, width, height);
+
+        const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
+        const source = sourceContext.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+        const output = document.createElement("canvas");
+        output.width = width;
+        output.height = height;
+        const outputContext = output.getContext("2d");
+        const target = outputContext.createImageData(width, height);
+        const [a, b, c, d, e, f, g, h] = coefficients;
+
+        for (let y = 0; y < height; y += 1) {
+          for (let x = 0; x < width; x += 1) {
+            const denominator = g * x + h * y + 1;
+            const sourceX = (a * x + b * y + c) / denominator;
+            const sourceY = (d * x + e * y + f) / denominator;
+            const targetIndex = (y * width + x) * 4;
+            target.data[targetIndex] = sampleBilinear(source.data, sourceCanvas.width, sourceCanvas.height, sourceX, sourceY, 0);
+            target.data[targetIndex + 1] = sampleBilinear(source.data, sourceCanvas.width, sourceCanvas.height, sourceX, sourceY, 1);
+            target.data[targetIndex + 2] = sampleBilinear(source.data, sourceCanvas.width, sourceCanvas.height, sourceX, sourceY, 2);
+            target.data[targetIndex + 3] = 255;
+          }
+        }
+
+        outputContext.putImageData(target, 0, 0);
+        return output;
+      }
+
+      function perspectiveCorrectCanvas(sourceCanvas) {
+        const detection = detectDocumentQuad(sourceCanvas);
+        if (!detection.found) {
+          return { canvas: sourceCanvas, detection };
+        }
+
+        try {
+          return { canvas: warpPerspectiveCanvas(sourceCanvas, detection.corners), detection };
+        } catch (error) {
+          return { canvas: sourceCanvas, detection: { ...detection, found: false, confidence: 0 } };
+        }
+      }
+
+      function percentileFromHistogram(histogram, total, percentile) {
+        const target = total * percentile;
+        let seen = 0;
+        for (let i = 0; i < histogram.length; i += 1) {
+          seen += histogram[i];
+          if (seen >= target) {
+            return i;
+          }
+        }
+        return histogram.length - 1;
+      }
+
+      function otsuThreshold(histogram, total) {
+        let sum = 0;
+        for (let i = 0; i < histogram.length; i += 1) {
+          sum += i * histogram[i];
+        }
+
+        let sumBackground = 0;
+        let weightBackground = 0;
+        let maxVariance = -1;
+        let threshold = 150;
+        for (let i = 0; i < histogram.length; i += 1) {
+          weightBackground += histogram[i];
+          if (weightBackground === 0) {
+            continue;
+          }
+
+          const weightForeground = total - weightBackground;
+          if (weightForeground === 0) {
+            break;
+          }
+
+          sumBackground += i * histogram[i];
+          const meanBackground = sumBackground / weightBackground;
+          const meanForeground = (sum - sumBackground) / weightForeground;
+          const variance = weightBackground * weightForeground * (meanBackground - meanForeground) ** 2;
+          if (variance > maxVariance) {
+            maxVariance = variance;
+            threshold = i;
+          }
+        }
+        return threshold;
+      }
+
+      function enhanceCanvas(sourceCanvas, mode, detection) {
+        const renderMode = mode === "report" ? "color" : mode;
+        const output = document.createElement("canvas");
+        output.width = sourceCanvas.width;
+        output.height = sourceCanvas.height;
+        const edgeCanvas = document.createElement("canvas");
+        edgeCanvas.width = sourceCanvas.width;
+        edgeCanvas.height = sourceCanvas.height;
+
+        const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
+        const outputContext = output.getContext("2d");
+        const edgeContext = edgeCanvas.getContext("2d");
+        const image = sourceContext.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+        const edgeImage = edgeContext.createImageData(sourceCanvas.width, sourceCanvas.height);
+        const data = image.data;
+        const pixelCount = sourceCanvas.width * sourceCanvas.height;
+        const rawLum = new Uint8ClampedArray(pixelCount);
+        const correctedLum = new Uint8ClampedArray(pixelCount);
+        const normalizedLum = new Uint8ClampedArray(pixelCount);
+        const tileSize = Math.max(36, Math.round(Math.max(sourceCanvas.width, sourceCanvas.height) / 26));
+        const gridWidth = Math.ceil(sourceCanvas.width / tileSize);
+        const gridHeight = Math.ceil(sourceCanvas.height / tileSize);
+        const tileSums = new Float64Array(gridWidth * gridHeight);
+        const tileCounts = new Uint32Array(gridWidth * gridHeight);
+        const histogram = new Array(256).fill(0);
+
+        for (let y = 0; y < sourceCanvas.height; y += 1) {
+          for (let x = 0; x < sourceCanvas.width; x += 1) {
+            const pixel = y * sourceCanvas.width + x;
+            const index = pixel * 4;
+            const value = Math.round(luminance(data[index], data[index + 1], data[index + 2]));
+            rawLum[pixel] = value;
+            const tileX = Math.floor(x / tileSize);
+            const tileY = Math.floor(y / tileSize);
+            const tileIndex = tileY * gridWidth + tileX;
+            tileSums[tileIndex] += Math.max(value, 115);
+            tileCounts[tileIndex] += 1;
+          }
+        }
+
+        for (let y = 0; y < sourceCanvas.height; y += 1) {
+          for (let x = 0; x < sourceCanvas.width; x += 1) {
+            const pixel = y * sourceCanvas.width + x;
+            const tileX = Math.floor(x / tileSize);
+            const tileY = Math.floor(y / tileSize);
+            const tileIndex = tileY * gridWidth + tileX;
+            const tileAverage = tileSums[tileIndex] / Math.max(1, tileCounts[tileIndex]);
+            const shadowLift = (222 - tileAverage) * 0.48;
+            const corrected = clamp(Math.round(rawLum[pixel] + shadowLift), 0, 255);
+            correctedLum[pixel] = corrected;
+            histogram[corrected] += 1;
+          }
+        }
+
+        const low = percentileFromHistogram(histogram, pixelCount, 0.015);
+        const high = Math.max(low + 18, percentileFromHistogram(histogram, pixelCount, 0.988));
+        const threshold = clamp(Math.round((otsuThreshold(histogram, pixelCount) - low) * (255 / (high - low))), 110, 190);
+        let sum = 0;
+        let sumSquares = 0;
+        let edgeCount = 0;
+
+        for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+          let normalized = clamp(Math.round((correctedLum[pixel] - low) * (255 / (high - low))), 0, 255);
+          if (normalized > 215) {
+            normalized = Math.round(255 - (255 - normalized) * 0.35);
+          }
+          normalizedLum[pixel] = normalized;
+        }
+
+        for (let y = 0; y < sourceCanvas.height; y += 1) {
+          for (let x = 0; x < sourceCanvas.width; x += 1) {
+            const pixel = y * sourceCanvas.width + x;
+            const index = pixel * 4;
+            const center = normalizedLum[pixel];
+            const left = normalizedLum[y * sourceCanvas.width + Math.max(0, x - 1)];
+            const right = normalizedLum[y * sourceCanvas.width + Math.min(sourceCanvas.width - 1, x + 1)];
+            const top = normalizedLum[Math.max(0, y - 1) * sourceCanvas.width + x];
+            const bottom = normalizedLum[Math.min(sourceCanvas.height - 1, y + 1) * sourceCanvas.width + x];
+            const blur = (left + right + top + bottom) / 4;
+            const sharpened = clamp(Math.round(center + (center - blur) * 0.65), 0, 255);
+            const gradient = Math.abs(right - left) + Math.abs(bottom - top);
+            if (gradient > 42) {
+              edgeCount += 1;
+            }
+            const edgeValue = gradient > 32 ? clamp(Math.round(gradient * 2.2), 0, 255) : 0;
+            edgeImage.data[index] = edgeValue;
+            edgeImage.data[index + 1] = edgeValue;
+            edgeImage.data[index + 2] = edgeValue;
+            edgeImage.data[index + 3] = 255;
+            sum += sharpened;
+            sumSquares += sharpened * sharpened;
+
+          if (renderMode === "binary") {
+              const value = sharpened > threshold ? 255 : 0;
+              data[index] = value;
+              data[index + 1] = value;
+              data[index + 2] = value;
+          } else if (renderMode === "gray") {
+              data[index] = sharpened;
+              data[index + 1] = sharpened;
+              data[index + 2] = sharpened;
+          } else if (renderMode === "edges") {
+              data[index] = edgeValue;
+              data[index + 1] = edgeValue;
+              data[index + 2] = edgeValue;
+          } else {
+              const factor = sharpened / Math.max(1, rawLum[pixel]);
+              data[index] = clamp(Math.round(data[index] * factor), 0, 255);
+              data[index + 1] = clamp(Math.round(data[index + 1] * factor), 0, 255);
+              data[index + 2] = clamp(Math.round(data[index + 2] * factor), 0, 255);
+            }
+            data[index + 3] = 255;
+          }
+        }
+
+        outputContext.putImageData(image, 0, 0);
+        edgeContext.putImageData(edgeImage, 0, 0);
+        const mean = sum / Math.max(1, pixelCount);
+        const contrast = Math.sqrt(Math.max(0, sumSquares / Math.max(1, pixelCount) - mean * mean));
+        return {
+          canvas: output,
+          edgeCanvas,
+          metrics: {
+            perspectiveConfidence: detection.found ? detection.confidence : 0,
+            edgeDensity: edgeCount / Math.max(1, pixelCount),
+            contrast,
+            threshold,
+          },
+        };
+      }
+
+      function drawContained(context, sourceCanvas, x, y, width, height) {
+        context.fillStyle = "#f2f4f7";
+        context.fillRect(x, y, width, height);
+        const scale = Math.min(width / sourceCanvas.width, height / sourceCanvas.height);
+        const drawWidth = sourceCanvas.width * scale;
+        const drawHeight = sourceCanvas.height * scale;
+        const drawX = x + (width - drawWidth) / 2;
+        const drawY = y + (height - drawHeight) / 2;
+        context.drawImage(sourceCanvas, drawX, drawY, drawWidth, drawHeight);
+      }
+
+      function buildAnalysisCanvas(sourceCanvas, processedCanvas, edgeCanvas, metrics) {
+        const report = document.createElement("canvas");
+        report.width = 1200;
+        report.height = 1600;
+        const context = report.getContext("2d");
+
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, report.width, report.height);
+
+        context.fillStyle = "#17202a";
+        context.font = "700 54px Arial, sans-serif";
+        context.fillText("PocketCV Report", 64, 96);
+        context.font = "700 24px Arial, sans-serif";
+        context.fillStyle = "#687386";
+        context.fillText("On-device image processing: perspective, illumination, contrast, edges", 64, 136);
+
+        context.font = "700 28px Arial, sans-serif";
+        context.fillStyle = "#17202a";
+        context.fillText("Source", 64, 206);
+        context.fillText("Processed", 626, 206);
+        drawContained(context, sourceCanvas, 64, 230, 510, 520);
+        drawContained(context, processedCanvas, 626, 230, 510, 520);
+
+        context.font = "700 28px Arial, sans-serif";
+        context.fillStyle = "#17202a";
+        context.fillText("Edge Map", 64, 832);
+        drawContained(context, edgeCanvas, 64, 856, 510, 410);
+
+        context.fillStyle = "#17202a";
+        context.fillText("Metrics", 626, 832);
+        const rows = [
+          ["Perspective confidence", `${Math.round(metrics.perspectiveConfidence * 100)}%`],
+          ["Edge density", `${Math.round(metrics.edgeDensity * 1000) / 10}%`],
+          ["Contrast", `${Math.round(metrics.contrast * 10) / 10}`],
+          ["Binarization threshold", `${metrics.threshold}`],
+        ];
+
+        context.font = "700 24px Arial, sans-serif";
+        rows.forEach((row, index) => {
+          const y = 882 + index * 72;
+          context.fillStyle = index % 2 === 0 ? "#f6f8fb" : "#ffffff";
+          context.fillRect(626, y - 38, 510, 56);
+          context.fillStyle = "#687386";
+          context.fillText(row[0], 648, y);
+          context.fillStyle = "#157f72";
+          context.textAlign = "right";
+          context.fillText(row[1], 1110, y);
+          context.textAlign = "left";
+        });
+
+        context.fillStyle = "#d9dee8";
+        context.fillRect(64, 1378, 1072, 2);
+        context.font = "700 22px Arial, sans-serif";
+        context.fillStyle = "#687386";
+        context.fillText("Generated locally in the browser. No image upload required.", 64, 1434);
+        return report;
+      }
+
+      async function processBlob(blob, name) {
+        const image = await loadImage(blob);
+        const sourceCanvas = drawImageToCanvas(image);
+        const corrected = perspectiveCorrectCanvas(sourceCanvas);
+        const enhanced = enhanceCanvas(corrected.canvas, modeEl.value, corrected.detection);
+        const processedCanvas =
+          modeEl.value === "report" ? buildAnalysisCanvas(sourceCanvas, enhanced.canvas, enhanced.edgeCanvas, enhanced.metrics) : enhanced.canvas;
+        const processedBlob = await canvasToBlob(processedCanvas, "image/jpeg", 0.92);
+        return {
+          sourceBlob: blob,
+          name,
+          canvas: processedCanvas,
+          metrics: enhanced.metrics,
+          previewUrl: URL.createObjectURL(processedBlob),
+        };
+      }
+
+      async function addBlob(blob, name) {
+        revokePdfUrl();
+        setBusy(true);
+        setStatus("Processing on device...");
+        try {
+          const page = await processBlob(blob, name);
+          state.pages.push(page);
+          refreshPages();
+        } catch (error) {
+          setBusy(false);
+          setStatus(error.message || "Could not process image.", true);
+        }
+      }
+
+      async function reprocessPages() {
+        if (!state.pages.length) {
+          return;
+        }
+
+        revokePdfUrl();
+        setBusy(true);
+        setStatus("Reprocessing on device...");
+        try {
+          const sourcePages = state.pages.map((page) => ({ blob: page.sourceBlob, name: page.name }));
+          state.pages.forEach((page) => URL.revokeObjectURL(page.previewUrl));
+          state.pages = [];
+          for (const page of sourcePages) {
+            state.pages.push(await processBlob(page.blob, page.name));
+          }
+          refreshPages();
+        } catch (error) {
+          setBusy(false);
+          setStatus(error.message || "Could not reprocess pages.", true);
+        }
+      }
+
+      async function startCamera() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          setStatus("Use Add page on this device.", true);
+          return;
+        }
+
+        setBusy(true);
+        try {
+          state.stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: "environment" },
+              width: { ideal: 1920 },
+              height: { ideal: 2560 },
+            },
+            audio: false,
+          });
+          video.srcObject = state.stream;
+          empty.hidden = true;
+          setBusy(false);
+          updateStatus();
+        } catch (error) {
+          state.stream = null;
+          setBusy(false);
+          setStatus("Camera preview unavailable. Use Add page.", true);
+        }
+      }
+
+      async function capturePage() {
+        if (!state.stream || !video.videoWidth) {
+          return;
+        }
+
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+        const blob = await canvasToBlob(canvas, "image/jpeg", 0.94);
+        await addBlob(blob, `capture-${Date.now()}.jpg`);
+      }
+
+      function textBytes(text) {
+        return new TextEncoder().encode(text);
+      }
+
+      function concatBytes(chunks) {
+        const size = chunks.reduce((total, chunk) => total + chunk.length, 0);
+        const output = new Uint8Array(size);
+        let offset = 0;
+        chunks.forEach((chunk) => {
+          output.set(chunk, offset);
+          offset += chunk.length;
+        });
+        return output;
+      }
+
+      async function jpegBytesFromCanvas(pageCanvas) {
+        const blob = await canvasToBlob(pageCanvas, "image/jpeg", 0.92);
+        return new Uint8Array(await blob.arrayBuffer());
+      }
+
+      async function createPdfBlob(pages) {
+        const encoder = new TextEncoder();
+        const objects = new Map();
+        let nextId = 1;
+        const reserve = () => nextId++;
+
+        const catalogId = reserve();
+        const pagesId = reserve();
+        const pageRefs = [];
+
+        const imageData = [];
+        for (const page of pages) {
+          imageData.push({
+            bytes: await jpegBytesFromCanvas(page.canvas),
+            width: page.canvas.width,
+            height: page.canvas.height,
+          });
+        }
+
+        imageData.forEach((image, index) => {
+          const pageId = reserve();
+          const contentId = reserve();
+          const imageId = reserve();
+          pageRefs.push(`${pageId} 0 R`);
+
+          const usableWidth = A4_WIDTH - PAGE_MARGIN * 2;
+          const usableHeight = A4_HEIGHT - PAGE_MARGIN * 2;
+          const scale = Math.min(usableWidth / image.width, usableHeight / image.height);
+          const drawWidth = image.width * scale;
+          const drawHeight = image.height * scale;
+          const x = (A4_WIDTH - drawWidth) / 2;
+          const y = (A4_HEIGHT - drawHeight) / 2;
+          const imageName = `/Im${index + 1}`;
+          const content = `q\n${drawWidth.toFixed(2)} 0 0 ${drawHeight.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm\n${imageName} Do\nQ\n`;
+          const contentBytes = encoder.encode(content);
+
+          objects.set(pageId, [
+            textBytes(
+              `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${A4_WIDTH} ${A4_HEIGHT}] /Resources << /XObject << ${imageName} ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>`
+            ),
+          ]);
+          objects.set(contentId, [
+            textBytes(`<< /Length ${contentBytes.length} >>\nstream\n`),
+            contentBytes,
+            textBytes("endstream"),
+          ]);
+          objects.set(imageId, [
+            textBytes(
+              `<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.bytes.length} >>\nstream\n`
+            ),
+            image.bytes,
+            textBytes("\nendstream"),
+          ]);
+        });
+
+        objects.set(catalogId, [textBytes(`<< /Type /Catalog /Pages ${pagesId} 0 R >>`)]);
+        objects.set(pagesId, [textBytes(`<< /Type /Pages /Count ${pages.length} /Kids [${pageRefs.join(" ")}] >>`)]);
+
+        const chunks = [textBytes("%PDF-1.4\n")];
+        const offsets = [0];
+        let byteOffset = chunks[0].length;
+        for (let id = 1; id < nextId; id += 1) {
+          offsets[id] = byteOffset;
+          const header = textBytes(`${id} 0 obj\n`);
+          chunks.push(header);
+          byteOffset += header.length;
+
+          const body = objects.get(id);
+          body.forEach((chunk) => {
+            chunks.push(chunk);
+            byteOffset += chunk.length;
+          });
+
+          const footer = textBytes("\nendobj\n");
+          chunks.push(footer);
+          byteOffset += footer.length;
+        }
+
+        const xrefOffset = byteOffset;
+        let xref = `xref\n0 ${nextId}\n0000000000 65535 f \n`;
+        for (let id = 1; id < nextId; id += 1) {
+          xref += `${String(offsets[id]).padStart(10, "0")} 00000 n \n`;
+        }
+        xref += `trailer\n<< /Size ${nextId} /Root ${catalogId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+        chunks.push(textBytes(xref));
+
+        return new Blob([concatBytes(chunks)], { type: "application/pdf" });
+      }
+
+      async function generatePdf() {
+        if (!state.pages.length) {
+          return;
+        }
+
+        revokePdfUrl();
+        setBusy(true);
+        setStatus("Generating PDF on device...");
+        try {
+          const blob = await createPdfBlob(state.pages);
+          if (!blob.size) {
+            throw new Error("PDF generation failed.");
+          }
+
+          state.pdfUrl = URL.createObjectURL(blob);
+          downloadEl.href = state.pdfUrl;
+          downloadEl.hidden = false;
+          downloadEl.click();
+          setBusy(false);
+          setStatus(`PDF ready - ${state.pages.length} page${state.pages.length === 1 ? "" : "s"}`);
+        } catch (error) {
+          setBusy(false);
+          setStatus(error.message || "PDF generation failed.", true);
+        }
+      }
+
+      startButton.addEventListener("click", startCamera);
+      captureButton.addEventListener("click", capturePage);
+      pdfButton.addEventListener("click", generatePdf);
+      modeEl.addEventListener("change", reprocessPages);
+
+      clearButton.addEventListener("click", () => {
+        state.pages.forEach((page) => URL.revokeObjectURL(page.previewUrl));
+        state.pages = [];
+        revokePdfUrl();
+        refreshPages();
+      });
+
+      fileInput.addEventListener("change", async () => {
+        const files = Array.from(fileInput.files || []);
+        fileInput.value = "";
+        for (const file of files) {
+          await addBlob(file, file.name || `page-${Date.now()}.jpg`);
+        }
+      });
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        startButton.disabled = true;
+      }
+
+      refreshPages();
+    </script>
+  </body>
+</html>

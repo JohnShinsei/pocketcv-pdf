@@ -1,0 +1,9 @@
+{
+  "name": "PocketCV PDF",
+  "short_name": "PocketCV",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#157f72",
+  "icons": []
+}
