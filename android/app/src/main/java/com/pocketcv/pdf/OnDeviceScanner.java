@@ -59,7 +59,33 @@ final class OnDeviceScanner {
     private OnDeviceScanner() {
     }
 
+    static float[] detectCorners(byte[] imageBytes, int targetWidth, int targetHeight) throws Exception {
+        Bitmap input = decodeScaledBitmap(imageBytes);
+        Mat rgba = new Mat();
+        Mat bgr = new Mat();
+        try {
+            Utils.bitmapToMat(input, rgba);
+            Imgproc.cvtColor(rgba, bgr, Imgproc.COLOR_RGBA2BGR);
+            Quad quad = detectDocument(bgr);
+            return scaleCorners(quad.points, bgr.cols(), bgr.rows(), targetWidth, targetHeight);
+        } finally {
+            rgba.release();
+            bgr.release();
+        }
+    }
+
     static Result process(byte[] imageBytes, String filename, String mode) throws Exception {
+        return process(imageBytes, filename, mode, null, 0, 0);
+    }
+
+    static Result process(
+            byte[] imageBytes,
+            String filename,
+            String mode,
+            float[] manualCorners,
+            int cornerImageWidth,
+            int cornerImageHeight
+    ) throws Exception {
         Bitmap input = decodeScaledBitmap(imageBytes);
         Mat rgba = new Mat();
         Mat bgr = new Mat();
@@ -68,7 +94,10 @@ final class OnDeviceScanner {
         try {
             Utils.bitmapToMat(input, rgba);
             Imgproc.cvtColor(rgba, bgr, Imgproc.COLOR_RGBA2BGR);
-            Quad quad = detectDocument(bgr);
+            Quad quad = manualQuad(manualCorners, cornerImageWidth, cornerImageHeight, bgr.cols(), bgr.rows());
+            if (quad == null) {
+                quad = detectDocument(bgr);
+            }
             Size outputSize = warpSize(quad.points);
             Point[] target = new Point[]{
                     new Point(0, 0),
@@ -103,6 +132,7 @@ final class OnDeviceScanner {
             detection.put("confidence", quad.confidence);
             detection.put("corners", cornersJson(quad.points));
             report.put("document_detection", detection);
+            report.put("manual_corners", "manual_overlay_homography".equals(quad.method));
             report.put("exports", "png,pdf");
             return new Result(preview, png, pdf, report);
         } finally {
@@ -111,6 +141,26 @@ final class OnDeviceScanner {
             warped.release();
             output.release();
         }
+    }
+
+    private static Quad manualQuad(float[] corners, int sourceWidth, int sourceHeight, int targetWidth, int targetHeight) {
+        if (corners == null || corners.length < 8 || sourceWidth <= 0 || sourceHeight <= 0) {
+            return null;
+        }
+        Point[] scaled = new Point[4];
+        double scaleX = (double) targetWidth / Math.max(1, sourceWidth);
+        double scaleY = (double) targetHeight / Math.max(1, sourceHeight);
+        for (int i = 0; i < 4; i++) {
+            double x = clamp(corners[i * 2] * scaleX, 0, targetWidth - 1);
+            double y = clamp(corners[i * 2 + 1] * scaleY, 0, targetHeight - 1);
+            scaled[i] = new Point(x, y);
+        }
+        Point[] ordered = order(scaled);
+        double area = Math.abs(polygonArea(ordered));
+        if (area < Math.max(1.0, targetWidth * targetHeight * 0.01)) {
+            return null;
+        }
+        return new Quad(ordered, "manual_overlay_homography", 1.0);
     }
 
     private static Bitmap decodeScaledBitmap(byte[] imageBytes) {
@@ -238,6 +288,31 @@ final class OnDeviceScanner {
 
     private static double distance(Point a, Point b) {
         return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+
+    private static double polygonArea(Point[] points) {
+        double area = 0.0;
+        for (int i = 0; i < points.length; i++) {
+            Point current = points[i];
+            Point next = points[(i + 1) % points.length];
+            area += current.x * next.y - next.x * current.y;
+        }
+        return area / 2.0;
+    }
+
+    private static double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private static float[] scaleCorners(Point[] points, int sourceWidth, int sourceHeight, int targetWidth, int targetHeight) {
+        float[] scaled = new float[8];
+        double scaleX = (double) Math.max(1, targetWidth) / Math.max(1, sourceWidth);
+        double scaleY = (double) Math.max(1, targetHeight) / Math.max(1, sourceHeight);
+        for (int i = 0; i < points.length; i++) {
+            scaled[i * 2] = (float) clamp(points[i].x * scaleX, 0, Math.max(0, targetWidth - 1));
+            scaled[i * 2 + 1] = (float) clamp(points[i].y * scaleY, 0, Math.max(0, targetHeight - 1));
+        }
+        return scaled;
     }
 
     private static Mat enhance(Mat warped, String mode) {

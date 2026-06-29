@@ -37,6 +37,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 public class MainActivity extends Activity {
+    private static final int MAX_PREVIEW_EDGE = 1800;
     private static final int REQ_PICK_IMAGE = 1001;
     private static final int REQ_SAVE_IMAGE = 1002;
     private static final int REQ_SAVE_PDF = 1003;
@@ -51,9 +52,11 @@ public class MainActivity extends Activity {
     private CheckBox docxCheck;
     private TextView statusText;
     private TextView reportText;
-    private ImageView previewImage;
+    private CornerOverlayView cornerEditor;
+    private ImageView resultPreviewImage;
     private Button healthButton;
     private Button cameraButton;
+    private Button resetCornersButton;
     private Button onDeviceProcessButton;
     private Button processButton;
     private Button saveImageButton;
@@ -67,6 +70,9 @@ public class MainActivity extends Activity {
     private Uri pendingCameraUri;
     private String selectedImageName = "scan.jpg";
     private String pendingCameraName = "capture.jpg";
+    private byte[] selectedImageBytes;
+    private int selectedSourceWidth;
+    private int selectedSourceHeight;
     private byte[] latestImageBytes;
     private byte[] latestPdfBytes;
     private byte[] latestDocxBytes;
@@ -145,6 +151,12 @@ public class MainActivity extends Activity {
         pickButton.setOnClickListener(v -> pickImage());
         root.addView(pickButton, matchWidth());
 
+        resetCornersButton = new Button(this);
+        resetCornersButton.setText("自動角に戻す");
+        resetCornersButton.setEnabled(false);
+        resetCornersButton.setOnClickListener(v -> autoDetectCornersForEditor());
+        root.addView(resetCornersButton, matchWidth());
+
         onDeviceProcessButton = new Button(this);
         onDeviceProcessButton.setText("端末内OpenCVでスキャン");
         onDeviceProcessButton.setEnabled(false);
@@ -172,11 +184,14 @@ public class MainActivity extends Activity {
         statusText.setPadding(0, 10, 0, 10);
         root.addView(statusText);
 
-        previewImage = new ImageView(this);
-        previewImage.setAdjustViewBounds(true);
-        previewImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        previewImage.setPadding(0, 18, 0, 18);
-        root.addView(previewImage, matchWidth());
+        cornerEditor = new CornerOverlayView(this);
+        root.addView(cornerEditor, fixedHeight(560));
+
+        resultPreviewImage = new ImageView(this);
+        resultPreviewImage.setAdjustViewBounds(true);
+        resultPreviewImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        resultPreviewImage.setPadding(0, 18, 0, 18);
+        root.addView(resultPreviewImage, matchWidth());
 
         reportText = new TextView(this);
         reportText.setTextIsSelectable(true);
@@ -219,6 +234,19 @@ public class MainActivity extends Activity {
         );
         params.setMargins(0, 8, 0, 8);
         return params;
+    }
+
+    private LinearLayout.LayoutParams fixedHeight(int dp) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(dp)
+        );
+        params.setMargins(0, 8, 0, 8);
+        return params;
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
     private LinearLayout.LayoutParams rowWeight() {
@@ -291,7 +319,7 @@ public class MainActivity extends Activity {
 
         new Thread(() -> {
             try {
-                byte[] inputBytes = readAllBytes(selectedImageUri);
+                byte[] inputBytes = selectedImageBytes != null ? selectedImageBytes : readAllBytes(selectedImageUri);
                 JSONObject payload = postProcess(inputBytes);
                 String imageBase64 = payload.optString("image_base64", "");
                 if (!imageBase64.isEmpty()) {
@@ -305,12 +333,12 @@ public class MainActivity extends Activity {
                 if (!docxBase64.isEmpty()) {
                     latestDocxBytes = Base64.decode(docxBase64, Base64.DEFAULT);
                 }
-                String prettyPayload = payload.toString(2);
+                String prettyPayload = payloadForDisplay(payload).toString(2);
 
                 runOnUiThread(() -> {
                     if (latestImageBytes != null) {
                         Bitmap bitmap = BitmapFactory.decodeByteArray(latestImageBytes, 0, latestImageBytes.length);
-                        previewImage.setImageBitmap(bitmap);
+                        resultPreviewImage.setImageBitmap(bitmap);
                     }
                     reportText.setText(prettyPayload);
                     busy = false;
@@ -348,14 +376,21 @@ public class MainActivity extends Activity {
 
         new Thread(() -> {
             try {
-                byte[] inputBytes = readAllBytes(selectedImageUri);
-                OnDeviceScanner.Result result = OnDeviceScanner.process(inputBytes, selectedImageName, selectedMode());
+                byte[] inputBytes = selectedImageBytes != null ? selectedImageBytes : readAllBytes(selectedImageUri);
+                OnDeviceScanner.Result result = OnDeviceScanner.process(
+                        inputBytes,
+                        selectedImageName,
+                        selectedMode(),
+                        cornerEditor.getCorners(),
+                        cornerEditor.getImageWidth(),
+                        cornerEditor.getImageHeight()
+                );
                 latestImageBytes = result.imageBytes;
                 latestPdfBytes = result.pdfBytes;
                 latestDocxBytes = null;
                 String prettyReport = result.report.toString(2);
                 runOnUiThread(() -> {
-                    previewImage.setImageBitmap(result.previewBitmap);
+                    resultPreviewImage.setImageBitmap(result.previewBitmap);
                     reportText.setText(prettyReport);
                     busy = false;
                     updateSaveButtons();
@@ -425,6 +460,11 @@ public class MainActivity extends Activity {
             writeField(out, boundary, "searchable_pdf", searchablePdfCheck.isChecked() ? "true" : "false");
             writeField(out, boundary, "docx", docxCheck.isChecked() ? "true" : "false");
             writeField(out, boundary, "pdf", "true");
+            String corners = manualCornersForSource();
+            if (!corners.isEmpty()) {
+                writeField(out, boundary, "corners", corners);
+                writeField(out, boundary, "corners_space", "input");
+            }
             writeFile(out, boundary, "file", selectedImageName, imageBytes);
             out.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
         }
@@ -441,6 +481,22 @@ public class MainActivity extends Activity {
         return new JSONObject(response);
     }
 
+    private JSONObject payloadForDisplay(JSONObject payload) throws Exception {
+        JSONObject display = new JSONObject(payload.toString());
+        summarizeBase64(display, "image_base64", latestImageBytes);
+        summarizeBase64(display, "pdf_base64", latestPdfBytes);
+        summarizeBase64(display, "docx_base64", latestDocxBytes);
+        return display;
+    }
+
+    private void summarizeBase64(JSONObject payload, String key, byte[] bytes) throws Exception {
+        if (!payload.has(key)) {
+            return;
+        }
+        payload.remove(key);
+        payload.put(key.replace("_base64", "_bytes"), bytes == null ? 0 : bytes.length);
+    }
+
     private String normalizedEndpoint() {
         String endpoint = endpointInput.getText().toString().trim();
         while (endpoint.endsWith("/")) {
@@ -452,6 +508,31 @@ public class MainActivity extends Activity {
     private String selectedMode() {
         Object value = modeSpinner.getSelectedItem();
         return value == null ? "auto" : value.toString();
+    }
+
+    private String manualCornersForSource() {
+        if (cornerEditor == null || selectedSourceWidth <= 0 || selectedSourceHeight <= 0) {
+            return "";
+        }
+        float[] corners = cornerEditor.getCorners();
+        int editorWidth = cornerEditor.getImageWidth();
+        int editorHeight = cornerEditor.getImageHeight();
+        if (corners == null || editorWidth <= 0 || editorHeight <= 0) {
+            return "";
+        }
+        double scaleX = (double) selectedSourceWidth / editorWidth;
+        double scaleY = (double) selectedSourceHeight / editorHeight;
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < 4; i++) {
+            if (i > 0) {
+                builder.append(' ');
+            }
+            builder
+                    .append(Math.round(corners[i * 2] * scaleX))
+                    .append(',')
+                    .append(Math.round(corners[i * 2 + 1] * scaleY));
+        }
+        return builder.toString();
     }
 
     private void writeField(OutputStream out, String boundary, String name, String value) throws Exception {
@@ -542,6 +623,9 @@ public class MainActivity extends Activity {
         if (onDeviceProcessButton != null) {
             onDeviceProcessButton.setEnabled(selectedImageUri != null && opencvReady && !busy);
         }
+        if (resetCornersButton != null) {
+            resetCornersButton.setEnabled(selectedImageBytes != null && !busy);
+        }
     }
 
     private void setStatus(String message) {
@@ -581,17 +665,94 @@ public class MainActivity extends Activity {
     private void setSelectedImage(Uri uri, String name) {
         selectedImageUri = uri;
         selectedImageName = name;
-        try (InputStream in = getContentResolver().openInputStream(uri)) {
-            Bitmap bitmap = BitmapFactory.decodeStream(in);
-            previewImage.setImageBitmap(bitmap);
+        selectedImageBytes = null;
+        selectedSourceWidth = 0;
+        selectedSourceHeight = 0;
+        try {
+            selectedImageBytes = readAllBytes(uri);
+            int[] bounds = imageBounds(selectedImageBytes);
+            selectedSourceWidth = bounds[0];
+            selectedSourceHeight = bounds[1];
+            Bitmap bitmap = decodePreviewBitmap(selectedImageBytes);
+            cornerEditor.setBitmap(bitmap);
+            resultPreviewImage.setImageDrawable(null);
             latestImageBytes = null;
             latestPdfBytes = null;
             latestDocxBytes = null;
             reportText.setText("");
             setStatus("選択済み: " + selectedImageName);
             updateSaveButtons();
+            autoDetectCornersForEditor();
         } catch (Exception error) {
             setStatus("画像を開けません: " + error.getMessage());
+            updateSaveButtons();
         }
+    }
+
+    private Bitmap decodePreviewBitmap(byte[] imageBytes) {
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.length, bounds);
+        int sample = 1;
+        int maxEdge = Math.max(bounds.outWidth, bounds.outHeight);
+        while (maxEdge / sample > MAX_PREVIEW_EDGE) {
+            sample *= 2;
+        }
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inSampleSize = sample;
+        options.inPreferredConfig = Bitmap.Config.ARGB_8888;
+        return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.length, options);
+    }
+
+    private int[] imageBounds(byte[] imageBytes) {
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.length, bounds);
+        return new int[]{Math.max(1, bounds.outWidth), Math.max(1, bounds.outHeight)};
+    }
+
+    private void autoDetectCornersForEditor() {
+        if (selectedImageBytes == null || cornerEditor == null) {
+            return;
+        }
+        if (!opencvReady) {
+            cornerEditor.resetCorners();
+            setStatus("選択済み: " + selectedImageName + " · OpenCV未初期化");
+            updateSaveButtons();
+            return;
+        }
+        int targetWidth = cornerEditor.getImageWidth();
+        int targetHeight = cornerEditor.getImageHeight();
+        if (targetWidth <= 0 || targetHeight <= 0) {
+            return;
+        }
+        busy = true;
+        updateSaveButtons();
+        setStatus("自動角検出中: " + selectedImageName);
+        byte[] imageBytes = selectedImageBytes;
+        new Thread(() -> {
+            try {
+                float[] corners = OnDeviceScanner.detectCorners(imageBytes, targetWidth, targetHeight);
+                runOnUiThread(() -> {
+                    if (selectedImageBytes != imageBytes) {
+                        return;
+                    }
+                    cornerEditor.setCorners(corners);
+                    busy = false;
+                    updateSaveButtons();
+                    setStatus("選択済み: " + selectedImageName + " · 四隅調整OK");
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    if (selectedImageBytes != imageBytes) {
+                        return;
+                    }
+                    cornerEditor.resetCorners();
+                    busy = false;
+                    updateSaveButtons();
+                    setStatus("自動角検出失敗: " + error.getMessage());
+                });
+            }
+        }).start();
     }
 }

@@ -237,7 +237,10 @@ Start-Sleep -Seconds 4
 $pickerUi = Dump-Ui "ui-picker.xml"
 Tap-UiNode -UiPath $pickerUi -DescriptionPrefix "pocketcv-sample.jpg"
 Start-Sleep -Seconds 3
-$selectedUi = Dump-Ui "ui-selected.xml"
+$selectedUi = Wait-UiContains "四隅調整OK" 45 "ui-selected.xml"
+Find-NodeCenter -UiPath $selectedUi -Text "自動角に戻す" | Out-Null
+Tap-UiNode -UiPath $selectedUi -Text "自動角に戻す"
+$selectedUi = Wait-UiContains "四隅調整OK" 45 "ui-corners-reset.xml"
 Tap-UiNode -UiPath $selectedUi -Text "端末内OpenCVでスキャン"
 $offlineUi = Wait-UiContains "端末内処理完了" 90 "ui-on-device-processed.xml"
 Write-Host "Android app processed the sample image on device via OpenCV."

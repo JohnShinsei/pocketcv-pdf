@@ -14,8 +14,12 @@ class AndroidPackagingTest(unittest.TestCase):
 
         self.assertIn("http://10.0.2.2:8765", source)
         self.assertIn("OpenCVLoader.initLocal", source)
+        self.assertIn("CornerOverlayView", source)
+        self.assertIn("自動角に戻す", source)
         self.assertIn("端末内OpenCVでスキャン", source)
         self.assertIn("OnDeviceScanner.process", source)
+        self.assertIn("manualCornersForSource", source)
+        self.assertIn('"corners_space", "input"', source)
         self.assertIn("カメラで撮影", source)
         self.assertIn("MediaStore.ACTION_IMAGE_CAPTURE", source)
         self.assertIn("MediaStore.Images.Media.EXTERNAL_CONTENT_URI", source)
@@ -35,6 +39,8 @@ class AndroidPackagingTest(unittest.TestCase):
         self.assertIn("Imgproc.getPerspectiveTransform", scanner)
         self.assertIn("Imgproc.warpPerspective", scanner)
         self.assertIn("Imgproc.adaptiveThreshold", scanner)
+        self.assertIn("detectCorners", scanner)
+        self.assertIn("manual_overlay_homography", scanner)
         self.assertIn("PdfDocument", scanner)
         manifest = (ROOT / "android" / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
 
@@ -75,6 +81,8 @@ class AndroidPackagingTest(unittest.TestCase):
         self.assertIn("uiautomator dump", emulator_qa_script)
         self.assertIn("pocketcv-sample.jpg", emulator_qa_script)
         self.assertIn("カメラで撮影", emulator_qa_script)
+        self.assertIn("自動角に戻す", emulator_qa_script)
+        self.assertIn("四隅調整OK", emulator_qa_script)
         self.assertIn("端末内OpenCVでスキャン", emulator_qa_script)
         self.assertIn("PC後端でスキャン生成", emulator_qa_script)
 
