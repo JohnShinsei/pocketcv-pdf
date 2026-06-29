@@ -47,6 +47,7 @@ desktop = [
 clearscan = "clearscan_cv.cli:main"
 clearscan-dataset = "clearscan_cv.training_data:main"
 clearscan-docnet = "clearscan_cv.docnet:main"
+clearscan-synth = "clearscan_cv.synthetic_data:main"
 pocketcv-local = "clearscan_cv.local_app:main"
 
 [tool.setuptools.packages.find]

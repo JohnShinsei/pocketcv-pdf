@@ -240,6 +240,14 @@ clearscan --ocr-status --ocr-lang jpn+eng
 
 文書領域検出モデルを学習するためのデータセットを作る場合:
 
+実写データが少ない段階では、スマートフォン撮影に近い透視、影、背景、ぼけ、ノイズを持つ合成データから始められます。
+
+```bash
+clearscan-synth --out datasets/docnet-synth --count 1000 --width 960 --height 1280 --seed 42
+```
+
+手動四隅調整済みの実写データがある場合:
+
 ```bash
 clearscan-dataset --reports outputs/photo_report.json --out datasets/docnet
 ```
@@ -260,7 +268,7 @@ clearscan-dataset --annotations annotations.jsonl --image-root . --out datasets/
 
 ```bash
 pip install -e .[train]
-clearscan-docnet train --dataset datasets/docnet --out models/docnet.pt --epochs 20 --image-size 256
+clearscan-docnet train --dataset datasets/docnet-synth --out models/docnet.pt --epochs 20 --image-size 256
 clearscan-docnet predict --checkpoint models/docnet.pt --input photos/page_001.jpg --output outputs/page_001_corners.json
 clearscan photos/page_001.jpg --out outputs/model_scan --mode gray --external-detector-command "clearscan-docnet predict --checkpoint models/docnet.pt --input {input} --output {output}"
 ```
@@ -333,6 +341,7 @@ src/clearscan_cv/
   geometry.py     OpenCV による輪郭検出と透視変換
   model_hooks.py  外部 detector / 文書復元モデルを接続する fallback-safe hook
   docnet.py       任意 PyTorch による軽量文書 mask detector の学習 / 推論 CLI
+  synthetic_data.py 合成スマートフォン撮影データセットの生成
   training_data.py 手動四隅 / report から学習用 mask と corner manifest を生成
   pipeline.py     画像処理パイプライン
   quality.py      画像品質指標の計算
