@@ -6,6 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .evaluation import evaluate_readability
 from .export import build_pdf_bytes
 from .ocr import OcrUnavailableError, recognize_image, recover_layout_markdown
 from .pipeline import enhance_image
@@ -59,6 +60,8 @@ async def process_upload(
     ocr_engine: str = Form("auto"),
     pdf: bool = Form(False),
     searchable_pdf: bool = Form(False),
+    readability: bool = Form(False),
+    expected_text: str | None = Form(None),
 ) -> dict[str, object]:
     data = await file.read()
     image = _decode_image(data)
@@ -95,4 +98,6 @@ async def process_upload(
         )
         response["pdf_base64"] = base64.b64encode(pdf_bytes).decode("ascii")
         response["pdf_searchable"] = bool(searchable_pdf and ocr_result is not None and ocr_result.lines)
+    if readability or ocr_result is not None:
+        response["readability"] = evaluate_readability(result.image, ocr_result=ocr_result, expected_text=expected_text)
     return response

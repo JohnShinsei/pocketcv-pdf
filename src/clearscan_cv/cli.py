@@ -7,6 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .evaluation import evaluate_readability
 from .export import write_pdf
 from .ocr import OcrUnavailableError, recognize_image, recover_layout_markdown
 from .pipeline import process_file
@@ -23,6 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--searchable-pdf", action="store_true", help="Run OCR and write a searchable PDF text layer.")
     parser.add_argument("--ocr", action="store_true", help="Run optional OCR on the processed scan and write a TXT file.")
     parser.add_argument("--ocr-lang", default="jpn+eng", help="OCR language code, for example jpn+eng, eng, chi_sim+eng.")
+    parser.add_argument("--expected-text", help="Path to reference text for OCR edit distance and CER evaluation.")
+    parser.add_argument("--readability", action="store_true", help="Add OCR/readability metrics to the report.")
     parser.add_argument(
         "--ocr-engine",
         choices=["auto", "rapidocr", "tesseract", "paddleocr"],
@@ -54,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     output_path = Path(str(report["output_path"]))
     output_image: np.ndarray | None = None
     ocr_result = None
+    expected_text = Path(args.expected_text).read_text(encoding="utf-8") if args.expected_text else None
     if args.ocr or args.layout or args.searchable_pdf:
         output_image = _read_image(output_path)
         try:
@@ -71,6 +75,11 @@ def main(argv: list[str] | None = None) -> int:
             layout_path.write_text(recover_layout_markdown(ocr_result), encoding="utf-8")
             report["ocr_layout_path"] = str(layout_path)
 
+    if args.readability or ocr_result is not None:
+        if output_image is None:
+            output_image = _read_image(output_path)
+        report["readability"] = evaluate_readability(output_image, ocr_result=ocr_result, expected_text=expected_text)
+
     if args.pdf or args.searchable_pdf:
         if output_image is None:
             output_image = _read_image(output_path)
@@ -85,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         report["pdf"] = pdf_export.to_dict()
         report["pdf_path"] = str(pdf_path)
 
-    if args.ocr or args.layout or args.pdf or args.searchable_pdf:
+    if args.ocr or args.layout or args.pdf or args.searchable_pdf or args.readability:
         Path(str(report["report_path"])).write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2))
     return 0
