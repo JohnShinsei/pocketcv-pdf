@@ -1029,6 +1029,46 @@
         return "再撮影推奨";
       }
 
+      function scanQualityAdvice(metrics) {
+        if (!metrics) {
+          return { status: "pending", label: "評価待ち", action: "画像を追加してください" };
+        }
+
+        const issues = [];
+        const addIssue = (severity, label, action) => {
+          issues.push({ severity, label, action });
+        };
+        if (metrics.perspectiveConfidence < 0.28) {
+          addIssue(3, "四隅を再調整", "四隅調整/再撮影");
+        } else if (metrics.perspectiveConfidence < 0.48) {
+          addIssue(2, "四隅確認", "端の切れを確認");
+        }
+        if (metrics.shadowResidual > 42 || metrics.shadowScore < 0.48) {
+          addIssue(3, "影ムラ強め", "再撮影/グレー保存");
+        } else if (metrics.shadowResidual > 28) {
+          addIssue(2, "影ムラ確認", "白黒前に確認");
+        }
+        if (metrics.boldnessRisk > 0.55 || metrics.inkDensity > 0.16) {
+          addIssue(3, "文字太り注意", "グレー保存/再撮影");
+        } else if (metrics.boldnessRisk > 0.28) {
+          addIssue(2, "文字太り確認", "小文字を確認");
+        }
+        if (metrics.paperGrayResidue > 0.08) {
+          addIssue(2, "灰色残り", "再撮影/グレー保存");
+        }
+        if (metrics.qualityScore < 45) {
+          addIssue(3, "再撮影推奨", "真上から撮り直す");
+        } else if (metrics.qualityScore < 65) {
+          addIssue(2, "品質確認", "レポート確認");
+        }
+
+        if (!issues.length) {
+          return { status: "ready", label: "出力OK", action: "PDF化OK" };
+        }
+        issues.sort((a, b) => b.severity - a.severity);
+        return { status: issues[0].severity >= 3 ? "retake" : "review", label: issues[0].label, action: issues[0].action };
+      }
+
       function updateQualitySummary() {
         if (!state.pages.length) {
           qualitySummaryEl.textContent = "評価待ち";
@@ -1036,7 +1076,9 @@
         }
 
         const average = state.pages.reduce((sum, page) => sum + page.metrics.qualityScore, 0) / state.pages.length;
-        qualitySummaryEl.textContent = `平均品質 ${Math.round(average)} / 100 · ${qualityLabel(average)}`;
+        const adviceList = state.pages.map((page) => scanQualityAdvice(page.metrics)).filter((advice) => advice.status !== "ready");
+        const adviceText = adviceList.length ? ` · 要確認 ${adviceList.length}件: ${adviceList[0].label}` : "";
+        qualitySummaryEl.textContent = `平均品質 ${Math.round(average)} / 100 · ${qualityLabel(average)}${adviceText}`;
       }
 
       function sanitizePdfName(value) {
@@ -1189,6 +1231,7 @@
           footer.append(label, actions);
           const meta = document.createElement("div");
           meta.className = "page-meta";
+          const advice = scanQualityAdvice(page.metrics);
           meta.textContent = page.metrics
             ? `品質 ${Math.round(page.metrics.qualityScore)} · ${qualityLabel(page.metrics.qualityScore)} · ${
                 page.manualCorners ? "手動補正" : "自動補正"
@@ -1196,7 +1239,7 @@
                 page.metrics.perspectiveConfidence * 100
               )}% · エッジ ${
                 Math.round(page.metrics.edgeDensity * 1000) / 10
-              }% · ${formatSkewAngle(page.metrics.deskewAngle)} · ${formatResolution(page)}`
+              }% · ${formatSkewAngle(page.metrics.deskewAngle)} · ${advice.label} · ${formatResolution(page)}`
             : "端末内で処理済み";
 
           item.append(image, footer, meta);
@@ -3542,8 +3585,11 @@
 
         context.fillStyle = "#17202a";
         context.fillText("評価指標", 626, 832);
+        const advice = scanQualityAdvice(metrics);
         const rows = [
           ["総合品質", `${Math.round(metrics.qualityScore)} / 100`],
+          ["診断", advice.label],
+          ["推奨操作", advice.action],
           ["透視補正信頼度", `${Math.round(metrics.perspectiveConfidence * 100)}%`],
           ["文字行傾き補正", `${Math.round((metrics.deskewAngle || 0) * 10) / 10}°`],
           ["影ムラ残り", `${Math.round((metrics.shadowResidual || 0) * 10) / 10}`],
@@ -3554,11 +3600,11 @@
           ["二値化しきい値", `${metrics.threshold}`],
         ];
 
-        context.font = "700 24px 'Yu Gothic', 'Noto Sans JP', Arial, sans-serif";
+        context.font = "700 21px 'Yu Gothic', 'Noto Sans JP', Arial, sans-serif";
         rows.forEach((row, index) => {
-          const y = 872 + index * 63;
+          const y = 872 + index * 50;
           context.fillStyle = index % 2 === 0 ? "#f6f8fb" : "#ffffff";
-          context.fillRect(626, y - 36, 510, 50);
+          context.fillRect(626, y - 30, 510, 40);
           context.fillStyle = "#687386";
           context.fillText(row[0], 648, y);
           context.fillStyle = "#157f72";

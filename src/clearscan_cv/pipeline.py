@@ -11,7 +11,7 @@ import numpy as np
 from .corners import CornerPoints, manual_detection_from_corners, scale_corner_points
 from .dewarp import dewarp_by_textline_columns
 from .geometry import detect_document_corners, ensure_bgr, four_point_transform
-from .quality import assess_quality, compare_quality
+from .quality import assess_quality, compare_quality, diagnose_scan_quality
 
 OutputMode = Literal["color", "gray", "binary"]
 CornerCoordinateSpace = Literal["input", "processed"]
@@ -457,6 +457,7 @@ def enhance_image(
         output = enhanced
 
     quality_after = enhanced if mode == "binary" else output
+    output_quality = assess_quality(output)
     report = {
         "mode": mode,
         "auto_warp": auto_warp,
@@ -469,7 +470,11 @@ def enhance_image(
         "dewarp": dewarp_result.report if dewarp_result is not None else {"applied": False, "method": "disabled"},
         "deskew": deskew_report,
         "quality": compare_quality(deskewed, quality_after),
-        "output_quality": assess_quality(output),
+        "output_quality": output_quality,
+        "quality_diagnostics": diagnose_scan_quality(
+            output_quality,
+            perspective_confidence=float(detection.confidence) if detection.found else 0.0,
+        ),
         "pipeline": ["document_detection", "perspective_correction", "textline_dewarp", "textline_deskew", "illumination_normalization", mode],
     }
     return EnhancementResult(image=output, report=report)

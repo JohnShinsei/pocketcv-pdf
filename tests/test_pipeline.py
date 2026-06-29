@@ -365,6 +365,11 @@ class PipelineTest(unittest.TestCase):
         self.assertLess(float(after["shadow_residual"]), float(before["shadow_residual"]) * 0.35)
         self.assertLess(float(after["boldness_risk"]), 0.2)
 
+        report = enhance_image(page, mode="gray", auto_warp=False).report
+        self.assertIn("quality_diagnostics", report)
+        self.assertIn(report["quality_diagnostics"]["status"], {"ready", "review", "retake"})  # type: ignore[index]
+        self.assertIn("issues", report["quality_diagnostics"])  # type: ignore[operator]
+
     def test_binary_enhancement_keeps_antialias_text_from_becoming_bold(self) -> None:
         result = enhance_image(make_soft_antialiased_text_page(), mode="binary", auto_warp=False)
         black_ratio = float(np.mean(result.image < 128))
@@ -447,6 +452,7 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("edgeCanvas", html)
         self.assertIn("qualityScore", html)
         self.assertIn("assessOutputScanMetrics", html)
+        self.assertIn("scanQualityAdvice", html)
         self.assertIn("shadowResidual", html)
         self.assertIn("shadowScore", html)
         self.assertIn("inkDensity", html)
@@ -546,6 +552,10 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("影ムラ残り", html)
         self.assertIn("文字の墨量", html)
         self.assertIn("加太りリスク", html)
+        self.assertIn("診断", html)
+        self.assertIn("推奨操作", html)
+        self.assertIn("四隅を再調整", html)
+        self.assertIn("文字太り注意", html)
         self.assertIn("件目を上へ移動", html)
         self.assertIn("端末内でPDFを生成中", html)
         self.assertIn("PocketCV 画像処理レポート", html)
@@ -584,7 +594,7 @@ class PipelineTest(unittest.TestCase):
         worker = (ROOT / "src" / "clearscan_cv" / "static" / "sw.js").read_text(encoding="utf-8")
 
         self.assertIn("CACHE_NAME", worker)
-        self.assertIn("pocketcv-pdf-v16", worker)
+        self.assertIn("pocketcv-pdf-v17", worker)
         self.assertIn("install", worker)
         self.assertIn("fetch", worker)
         self.assertIn("event.request.mode === \"navigate\"", worker)

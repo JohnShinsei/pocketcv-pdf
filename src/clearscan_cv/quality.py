@@ -89,6 +89,120 @@ def assess_quality(image: np.ndarray) -> dict[str, float | int | str]:
     }
 
 
+def _metric_float(metrics: dict[str, object], key: str, default: float = 0.0) -> float:
+    value = metrics.get(key, default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def diagnose_scan_quality(
+    metrics: dict[str, object],
+    *,
+    perspective_confidence: float | None = None,
+    readability: dict[str, object] | None = None,
+) -> dict[str, object]:
+    score = _metric_float(metrics, "score")
+    shadow_residual = _metric_float(metrics, "shadow_residual")
+    shadow_score = _metric_float(metrics, "shadow_score", 1.0)
+    ink_density = _metric_float(metrics, "ink_density")
+    boldness_risk = _metric_float(metrics, "boldness_risk")
+    issues: list[dict[str, object]] = []
+
+    def add_issue(code: str, severity: str, message: str, action: str) -> None:
+        issues.append({"code": code, "severity": severity, "message": message, "action": action})
+
+    if perspective_confidence is not None:
+        if perspective_confidence < 0.28:
+            add_issue(
+                "perspective_low",
+                "high",
+                "Document corner confidence is low.",
+                "Adjust the four corners manually or retake with the whole page visible.",
+            )
+        elif perspective_confidence < 0.48:
+            add_issue(
+                "perspective_review",
+                "medium",
+                "Document corner confidence should be reviewed.",
+                "Check the corner overlay before exporting the final scan.",
+            )
+
+    if shadow_residual > 42.0 or shadow_score < 0.48:
+        add_issue(
+            "shadow_residual",
+            "high",
+            "Uneven paper illumination remains after enhancement.",
+            "Retake under flatter light or export grayscale for OCR-sensitive text.",
+        )
+    elif shadow_residual > 28.0:
+        add_issue(
+            "shadow_review",
+            "medium",
+            "Some uneven paper illumination remains.",
+            "Review the scan report before using binary output.",
+        )
+
+    if boldness_risk > 0.55 or ink_density > 0.16:
+        add_issue(
+            "bold_text",
+            "high",
+            "Binary output may be too bold for small text.",
+            "Use grayscale output or retake closer with better focus.",
+        )
+    elif boldness_risk > 0.28:
+        add_issue(
+            "bold_text_review",
+            "medium",
+            "Binary output may slightly thicken text strokes.",
+            "Check small characters before sharing or running OCR.",
+        )
+
+    if ink_density < 0.006 and _metric_float(metrics, "edge_density") < 0.018:
+        add_issue(
+            "weak_text",
+            "medium",
+            "Very little text ink was detected.",
+            "Use grayscale mode or retake with sharper focus.",
+        )
+
+    if readability is not None and _metric_float(readability, "textline_horizontal_score", 1.0) < 0.68:
+        add_issue(
+            "textline_tilt",
+            "medium",
+            "Text lines still look tilted or curved.",
+            "Adjust the four corners or retake from directly above.",
+        )
+
+    if score < 45.0:
+        add_issue(
+            "low_quality",
+            "high",
+            "Overall scan quality is low.",
+            "Retake from directly above with flatter light.",
+        )
+        status = "retake"
+    elif score < 65.0:
+        add_issue(
+            "quality_review",
+            "medium",
+            "Overall scan quality should be reviewed.",
+            "Check the scan report before exporting.",
+        )
+        status = "review"
+    elif issues:
+        status = "review"
+    else:
+        status = "ready"
+
+    return {
+        "status": status,
+        "issue_count": len(issues),
+        "issues": issues,
+    }
+
+
 def compare_quality(before: np.ndarray, after: np.ndarray) -> dict[str, object]:
     before_metrics = assess_quality(before)
     after_metrics = assess_quality(after)
