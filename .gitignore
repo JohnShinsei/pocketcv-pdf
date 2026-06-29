@@ -11,4 +11,6 @@ build/
 outputs/
 examples/generated/
 tmp/
+android/.gradle/
+android/app/build/
 .DS_Store

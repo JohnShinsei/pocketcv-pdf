@@ -25,9 +25,19 @@ class AndroidPackagingTest(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "android.yml").read_text(encoding="utf-8")
 
         self.assertIn("Android APK", workflow)
-        self.assertIn("gradle -p android :app:assembleDebug", workflow)
+        self.assertIn("working-directory: android", workflow)
+        self.assertIn("./gradlew :app:assembleDebug", workflow)
         self.assertIn("pocketcv-android-debug-apk", workflow)
         self.assertIn("app-debug.apk", workflow)
+
+    def test_android_gradle_wrapper_is_committed(self) -> None:
+        wrapper_bat = ROOT / "android" / "gradlew.bat"
+        wrapper_jar = ROOT / "android" / "gradle" / "wrapper" / "gradle-wrapper.jar"
+        wrapper_props = ROOT / "android" / "gradle" / "wrapper" / "gradle-wrapper.properties"
+
+        self.assertTrue(wrapper_bat.exists())
+        self.assertTrue(wrapper_jar.exists())
+        self.assertIn("gradle-8.10.2-bin.zip", wrapper_props.read_text(encoding="utf-8"))
 
     def test_local_backend_launcher_and_desktop_script_are_registered(self) -> None:
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
