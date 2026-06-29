@@ -58,6 +58,7 @@ PWA の Service Worker は新しい処理ロジックを検出しやすいよう
 - OCR 後の復元 Markdown から DOCX 文書を生成可能
 - 文字行投影に基づく軽量 dewarp により、軽い紙面カーブを補正
 - OCR バックエンドの導入状態を確認する診断コマンド
+- 手動四隅や処理レポートから、文書領域検出モデル学習用の mask / corner dataset を生成
 
 ## デモの使い方
 
@@ -237,6 +238,24 @@ OCR 環境を確認する場合:
 clearscan --ocr-status --ocr-lang jpn+eng
 ```
 
+文書領域検出モデルを学習するためのデータセットを作る場合:
+
+```bash
+clearscan-dataset --reports outputs/photo_report.json --out datasets/docnet
+```
+
+手動で作った JSONL アノテーションからも生成できます。
+
+```jsonl
+{"id":"page_001","image":"photos/page_001.jpg","corners":[[223,414],[1864,279],[2207,2685],[0,2943]]}
+```
+
+```bash
+clearscan-dataset --annotations annotations.jsonl --image-root . --out datasets/docnet
+```
+
+出力される `manifest.jsonl` には、学習画像、二値 mask、ピクセル座標の四隅、0-1 正規化四隅、train / val split が含まれます。第一段階の学習対象は、スマートフォン写真から文書 mask と四隅を予測する軽量 detector です。予測結果は既存の OpenCV Homography、去陰影、PDF/OCR パイプラインに接続できます。
+
 出力:
 
 - `*_clearscan.png`: 処理後画像
@@ -302,6 +321,7 @@ src/clearscan_cv/
   dewarp.py       文字行投影に基づく軽量 dewarp
   geometry.py     OpenCV による輪郭検出と透視変換
   model_hooks.py  外部 detector / 文書復元モデルを接続する fallback-safe hook
+  training_data.py 手動四隅 / report から学習用 mask と corner manifest を生成
   pipeline.py     画像処理パイプライン
   quality.py      画像品質指標の計算
   evaluation.py   OCR と読み取り品質の評価

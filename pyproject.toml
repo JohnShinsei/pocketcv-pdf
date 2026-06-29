@@ -42,6 +42,7 @@ desktop = [
 
 [project.scripts]
 clearscan = "clearscan_cv.cli:main"
+clearscan-dataset = "clearscan_cv.training_data:main"
 pocketcv-local = "clearscan_cv.local_app:main"
 
 [tool.setuptools.packages.find]
