@@ -824,6 +824,8 @@ class PipelineTest(unittest.TestCase):
         self.assertNotIn("撮影して追加", html)
         self.assertIn("navigator.share", html)
         self.assertIn("serviceWorker", html)
+        self.assertIn('navigator.serviceWorker.register("sw.js", { updateViaCache: "none" })', html)
+        self.assertIn("registration.update()", html)
         self.assertIn("beforeinstallprompt", html)
         self.assertIn("canvasToBlob", html)
         self.assertIn("Tesseract.recognize", html)
@@ -833,10 +835,12 @@ class PipelineTest(unittest.TestCase):
         worker = (ROOT / "src" / "clearscan_cv" / "static" / "sw.js").read_text(encoding="utf-8")
 
         self.assertIn("CACHE_NAME", worker)
-        self.assertIn("pocketcv-pdf-v18", worker)
+        self.assertIn("pocketcv-pdf-v19", worker)
         self.assertIn("install", worker)
         self.assertIn("fetch", worker)
         self.assertIn("event.request.mode === \"navigate\"", worker)
+        self.assertIn("self.skipWaiting()", worker)
+        self.assertIn("self.clients.claim()", worker)
 
 
 if __name__ == "__main__":
