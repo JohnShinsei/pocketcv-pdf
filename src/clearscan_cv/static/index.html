@@ -2839,7 +2839,9 @@
         const gridHeight = Math.ceil(sourceCanvas.height / tileSize);
         const tileHistograms = Array.from({ length: gridWidth * gridHeight }, () => new Uint32Array(256));
         const tileCounts = new Uint32Array(gridWidth * gridHeight);
+        const rawHistogram = new Array(256).fill(0);
         const normalizedHistogram = new Array(256).fill(0);
+        let rawSamples = 0;
 
         for (let y = 0; y < sourceCanvas.height; y += 1) {
           for (let x = 0; x < sourceCanvas.width; x += 1) {
@@ -2847,6 +2849,8 @@
             const index = pixel * 4;
             const value = Math.round(luminance(data[index], data[index + 1], data[index + 2]));
             rawLum[pixel] = value;
+            rawHistogram[value] += 1;
+            rawSamples += 1;
             const tileX = Math.floor(x / tileSize);
             const tileY = Math.floor(y / tileSize);
             const tileIndex = tileY * gridWidth + tileX;
@@ -2864,7 +2868,7 @@
         const backgroundRange =
           sortedBackgrounds[Math.min(sortedBackgrounds.length - 1, Math.floor(sortedBackgrounds.length * 0.95))] -
           sortedBackgrounds[Math.min(sortedBackgrounds.length - 1, Math.floor(sortedBackgrounds.length * 0.05))];
-        const rawRange = percentileFromHistogram(histogram, samples, 0.95) - percentileFromHistogram(histogram, samples, 0.2);
+        const rawRange = percentileFromHistogram(rawHistogram, rawSamples, 0.95) - percentileFromHistogram(rawHistogram, rawSamples, 0.2);
         const useGatosSauvola = renderMode === "binary" && (backgroundRange > 26 || rawRange > 45);
 
         for (let y = 0; y < sourceCanvas.height; y += 1) {

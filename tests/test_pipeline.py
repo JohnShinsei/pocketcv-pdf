@@ -309,6 +309,7 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("strokeContrast", html)
         self.assertIn("sauvolaThresholdValue", html)
         self.assertIn("useGatosSauvola", html)
+        self.assertIn("rawHistogram", html)
         self.assertIn("normalizedSquaredIntegral", html)
         self.assertIn("textEdge = inkLum[pixel] > 92", html)
         self.assertIn("strokeContrast > 31", html)
@@ -349,7 +350,7 @@ class PipelineTest(unittest.TestCase):
         worker = (ROOT / "src" / "clearscan_cv" / "static" / "sw.js").read_text(encoding="utf-8")
 
         self.assertIn("CACHE_NAME", worker)
-        self.assertIn("pocketcv-pdf-v9", worker)
+        self.assertIn("pocketcv-pdf-v10", worker)
         self.assertIn("install", worker)
         self.assertIn("fetch", worker)
         self.assertIn("event.request.mode === \"navigate\"", worker)
