@@ -76,6 +76,40 @@ uvicorn clearscan_cv.api:app --reload
 
 スマートフォンで撮影ボタンを使う場合は HTTPS が推奨です。GitHub Pages などの静的ホスティングに置くと、端末のカメラ画面・写真ライブラリ・PDF ファイル共有に近い形で試せます。
 
+## ローカル後端 / Android テスト
+
+Web 版の処理品質に依存せず、Python/OpenCV 後端で処理したい場合はローカル後端を起動します。
+
+PC 上でローカルアプリを起動する場合:
+
+```bash
+pip install -e .[api,ocr]
+pocketcv-local
+```
+
+起動後、`http://127.0.0.1:8765/local` が開きます。この画面は画像を `/api/process` に送り、Python/OpenCV 側でスキャン画像、PDF、OCR、DOCX を生成します。
+
+Android 実機から PC の後端へ接続する場合は、同じ Wi-Fi 上で後端を LAN 向けに起動します。
+
+```bash
+pocketcv-local --host 0.0.0.0 --port 8765
+```
+
+Android アプリ側の Backend URL:
+
+- Android Emulator: `http://10.0.2.2:8765`
+- 実機: `http://<PCのLAN IP>:8765` 例 `http://192.168.1.20:8765`
+
+Android APK は GitHub Actions の `Android APK` workflow で `pocketcv-android-debug-apk` artifact として生成します。アプリは WebView ではなく原生 Android クライアントで、選択した画像をローカル FastAPI 後端に送り、返ってきた PNG / PDF / DOCX を保存できます。
+
+Windows のローカル後端 EXE を作る場合:
+
+```powershell
+.\scripts\build_windows_local_app.ps1
+```
+
+生成物は `dist\PocketCV-PDF-Local\PocketCV-PDF-Local.exe` です。
+
 ## モード
 
 - `白黒スキャン`: 去陰影と文字強調を行った白黒スキャン画像を生成

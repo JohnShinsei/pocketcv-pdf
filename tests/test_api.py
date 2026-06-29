@@ -60,6 +60,14 @@ class ApiTest(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)
 
+    def test_local_backend_page_uses_process_api(self) -> None:
+        response = self.client.get("/local")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("PocketCV PDF Local", response.text)
+        self.assertIn("/api/process", response.text)
+        self.assertIn("Python/OpenCV", response.text)
+
     def test_process_endpoint_returns_scan_pdf_and_manual_corner_report(self) -> None:
         response = self.client.post(
             "/api/process",

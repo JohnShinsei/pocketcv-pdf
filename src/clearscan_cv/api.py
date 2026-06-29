@@ -66,6 +66,12 @@ def index() -> str:
     return html_path.read_text(encoding="utf-8")
 
 
+@app.get("/local", response_class=HTMLResponse)
+def local_index() -> str:
+    html_path = Path(__file__).with_name("static") / "local.html"
+    return html_path.read_text(encoding="utf-8")
+
+
 @app.get("/manifest.webmanifest")
 def manifest() -> Response:
     manifest_path = Path(__file__).with_name("static") / "manifest.webmanifest"
