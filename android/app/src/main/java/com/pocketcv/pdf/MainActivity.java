@@ -23,6 +23,7 @@ import android.widget.Spinner;
 import android.widget.TextView;
 
 import org.json.JSONObject;
+import org.opencv.android.OpenCVLoader;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -48,10 +49,14 @@ public class MainActivity extends Activity {
     private TextView reportText;
     private ImageView previewImage;
     private Button healthButton;
+    private Button onDeviceProcessButton;
     private Button processButton;
     private Button saveImageButton;
     private Button savePdfButton;
     private Button saveDocxButton;
+    private boolean opencvReady;
+    private String opencvStatus = "";
+    private boolean busy;
 
     private Uri selectedImageUri;
     private String selectedImageName = "scan.jpg";
@@ -62,6 +67,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        initializeOpenCv();
         setContentView(buildUi());
     }
 
@@ -73,13 +79,13 @@ public class MainActivity extends Activity {
         scroll.addView(root);
 
         TextView title = new TextView(this);
-        title.setText("PocketCV PDF Local");
+        title.setText("PocketCV PDF Android");
         title.setTextSize(24);
         title.setGravity(Gravity.START);
         root.addView(title);
 
         TextView intro = new TextView(this);
-        intro.setText("Android で画像を選択し、PC または LAN 内の FastAPI 後端へ送信します。Python/OpenCV がスキャン画像を生成します。エミュレーターでは 10.0.2.2 を使用します。");
+        intro.setText("Android で画像を選択し、端末内 OpenCV または PC/LAN 内の FastAPI 後端でスキャン画像を生成します。エミュレーターから PC 後端へ接続する場合は 10.0.2.2 を使用します。");
         intro.setPadding(0, 8, 0, 20);
         root.addView(intro);
 
@@ -127,8 +133,14 @@ public class MainActivity extends Activity {
         pickButton.setOnClickListener(v -> pickImage());
         root.addView(pickButton, matchWidth());
 
+        onDeviceProcessButton = new Button(this);
+        onDeviceProcessButton.setText("端末内OpenCVでスキャン");
+        onDeviceProcessButton.setEnabled(false);
+        onDeviceProcessButton.setOnClickListener(v -> processImageOnDevice());
+        root.addView(onDeviceProcessButton, matchWidth());
+
         processButton = new Button(this);
-        processButton.setText("ローカル後端でスキャン生成");
+        processButton.setText("PC後端でスキャン生成");
         processButton.setEnabled(false);
         processButton.setOnClickListener(v -> processImage());
         root.addView(processButton, matchWidth());
@@ -143,16 +155,16 @@ public class MainActivity extends Activity {
         saveRow.addView(saveDocxButton, rowWeight());
         root.addView(saveRow, matchWidth());
 
+        statusText = new TextView(this);
+        statusText.setText(opencvReady ? "画像待ち · OpenCV準備OK" : "画像待ち · OpenCV未初期化");
+        statusText.setPadding(0, 10, 0, 10);
+        root.addView(statusText);
+
         previewImage = new ImageView(this);
         previewImage.setAdjustViewBounds(true);
         previewImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
         previewImage.setPadding(0, 18, 0, 18);
         root.addView(previewImage, matchWidth());
-
-        statusText = new TextView(this);
-        statusText.setText("画像待ち");
-        statusText.setPadding(0, 10, 0, 10);
-        root.addView(statusText);
 
         reportText = new TextView(this);
         reportText.setTextIsSelectable(true);
@@ -170,6 +182,22 @@ public class MainActivity extends Activity {
         });
 
         return scroll;
+    }
+
+    private void initializeOpenCv() {
+        try {
+            opencvReady = OpenCVLoader.initLocal();
+            opencvStatus = opencvReady ? "OpenCV ready" : "OpenCV initLocal returned false";
+        } catch (Throwable error) {
+            try {
+                System.loadLibrary("opencv_java4");
+                opencvReady = true;
+                opencvStatus = "OpenCV ready via System.loadLibrary";
+            } catch (Throwable fallbackError) {
+                opencvReady = false;
+                opencvStatus = fallbackError.getMessage();
+            }
+        }
     }
 
     private LinearLayout.LayoutParams matchWidth() {
@@ -214,6 +242,7 @@ public class MainActivity extends Activity {
             setStatus("画像を選択してください。");
             return;
         }
+        busy = true;
         processButton.setEnabled(false);
         setStatus("ローカル Python/OpenCV 後端で処理中...");
         reportText.setText("");
@@ -246,13 +275,59 @@ public class MainActivity extends Activity {
                         previewImage.setImageBitmap(bitmap);
                     }
                     reportText.setText(prettyPayload);
+                    busy = false;
                     updateSaveButtons();
                     setStatus("完了");
                 });
             } catch (Exception error) {
                 runOnUiThread(() -> {
+                    busy = false;
                     setStatus("失敗: " + error.getMessage());
-                    processButton.setEnabled(true);
+                    updateSaveButtons();
+                });
+            }
+        }).start();
+    }
+
+    private void processImageOnDevice() {
+        if (selectedImageUri == null) {
+            setStatus("画像を選択してください。");
+            return;
+        }
+        if (!opencvReady) {
+            setStatus("OpenCVを初期化できません: " + opencvStatus);
+            return;
+        }
+        busy = true;
+        onDeviceProcessButton.setEnabled(false);
+        processButton.setEnabled(false);
+        setStatus("端末内 OpenCV で処理中...");
+        reportText.setText("");
+        latestImageBytes = null;
+        latestPdfBytes = null;
+        latestDocxBytes = null;
+        updateSaveButtons();
+
+        new Thread(() -> {
+            try {
+                byte[] inputBytes = readAllBytes(selectedImageUri);
+                OnDeviceScanner.Result result = OnDeviceScanner.process(inputBytes, selectedImageName, selectedMode());
+                latestImageBytes = result.imageBytes;
+                latestPdfBytes = result.pdfBytes;
+                latestDocxBytes = null;
+                String prettyReport = result.report.toString(2);
+                runOnUiThread(() -> {
+                    previewImage.setImageBitmap(result.previewBitmap);
+                    reportText.setText(prettyReport);
+                    busy = false;
+                    updateSaveButtons();
+                    setStatus("端末内処理完了");
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    busy = false;
+                    setStatus("端末内処理失敗: " + error.getMessage());
+                    updateSaveButtons();
                 });
             }
         }).start();
@@ -423,7 +498,12 @@ public class MainActivity extends Activity {
         saveImageButton.setEnabled(latestImageBytes != null);
         savePdfButton.setEnabled(latestPdfBytes != null);
         saveDocxButton.setEnabled(latestDocxBytes != null);
-        processButton.setEnabled(selectedImageUri != null);
+        if (processButton != null) {
+            processButton.setEnabled(selectedImageUri != null && !busy);
+        }
+        if (onDeviceProcessButton != null) {
+            onDeviceProcessButton.setEnabled(selectedImageUri != null && opencvReady && !busy);
+        }
     }
 
     private void setStatus(String message) {
@@ -444,7 +524,7 @@ public class MainActivity extends Activity {
                 Bitmap bitmap = BitmapFactory.decodeStream(getContentResolver().openInputStream(uri));
                 previewImage.setImageBitmap(bitmap);
                 setStatus("選択済み: " + selectedImageName);
-                processButton.setEnabled(true);
+                updateSaveButtons();
             } catch (Exception error) {
                 setStatus("画像を開けません: " + error.getMessage());
             }

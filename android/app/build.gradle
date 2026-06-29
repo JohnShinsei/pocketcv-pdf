@@ -19,3 +19,7 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 }
+
+dependencies {
+    implementation "org.opencv:opencv:4.13.0"
+}

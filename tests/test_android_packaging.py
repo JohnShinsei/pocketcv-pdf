@@ -13,6 +13,9 @@ class AndroidPackagingTest(unittest.TestCase):
         source = activity.read_text(encoding="utf-8")
 
         self.assertIn("http://10.0.2.2:8765", source)
+        self.assertIn("OpenCVLoader.initLocal", source)
+        self.assertIn("端末内OpenCVでスキャン", source)
+        self.assertIn("OnDeviceScanner.process", source)
         self.assertIn("API確認", source)
         self.assertIn('normalizedEndpoint() + "/api/health"', source)
         self.assertIn('normalizedEndpoint() + "/api/process"', source)
@@ -20,6 +23,16 @@ class AndroidPackagingTest(unittest.TestCase):
         self.assertIn("image_base64", source)
         self.assertIn("pdf_base64", source)
         self.assertNotIn("WebView", source)
+
+    def test_android_app_bundles_opencv_for_on_device_scanning(self) -> None:
+        build = (ROOT / "android" / "app" / "build.gradle").read_text(encoding="utf-8")
+        scanner = (ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "pocketcv" / "pdf" / "OnDeviceScanner.java").read_text(encoding="utf-8")
+
+        self.assertIn('implementation "org.opencv:opencv:4.13.0"', build)
+        self.assertIn("Imgproc.getPerspectiveTransform", scanner)
+        self.assertIn("Imgproc.warpPerspective", scanner)
+        self.assertIn("Imgproc.adaptiveThreshold", scanner)
+        self.assertIn("PdfDocument", scanner)
 
     def test_android_workflow_uploads_debug_apk(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "android.yml").read_text(encoding="utf-8")
@@ -55,6 +68,8 @@ class AndroidPackagingTest(unittest.TestCase):
         self.assertIn("PocketCV_API35", emulator_qa_script)
         self.assertIn("uiautomator dump", emulator_qa_script)
         self.assertIn("pocketcv-sample.jpg", emulator_qa_script)
+        self.assertIn("端末内OpenCVでスキャン", emulator_qa_script)
+        self.assertIn("PC後端でスキャン生成", emulator_qa_script)
 
 
 if __name__ == "__main__":

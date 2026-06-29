@@ -237,9 +237,13 @@ $pickerUi = Dump-Ui "ui-picker.xml"
 Tap-UiNode -UiPath $pickerUi -DescriptionPrefix "pocketcv-sample.jpg"
 Start-Sleep -Seconds 3
 $selectedUi = Dump-Ui "ui-selected.xml"
-Tap-UiNode -UiPath $selectedUi -Text "ローカル後端でスキャン生成"
+Tap-UiNode -UiPath $selectedUi -Text "端末内OpenCVでスキャン"
+$offlineUi = Wait-UiContains "端末内処理完了" 90 "ui-on-device-processed.xml"
+Write-Host "Android app processed the sample image on device via OpenCV."
+
+Tap-UiNode -UiPath $offlineUi -Text "PC後端でスキャン生成"
 $processedUi = Wait-UiContains "完了" 60 "ui-processed.xml"
-Write-Host "Android app processed the sample image."
+Write-Host "Android app processed the sample image through the local backend."
 
 $screenshotOnDevice = "/sdcard/Download/pocketcv-processed.png"
 $screenshot = Join-Path $OutDir "pocketcv-processed.png"
