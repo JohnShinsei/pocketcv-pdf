@@ -13,6 +13,7 @@ PocketCV PDF is a privacy-first mobile document scanner that captures or imports
 - Implemented quality metrics such as Laplacian sharpness, contrast, edge density, exposure balance, and score deltas to make image enhancement measurable.
 - Added browser-side Tesseract.js OCR over the enhanced scan output with copy and TXT export, structured as the second stage before document layout recovery.
 - Implemented Python-side optional OCR adapters for RapidOCR, Tesseract, and PaddleOCR, normalizing output into line/word bounding boxes and confidence scores.
+- Added OCR backend diagnostics that report missing Python packages, Tesseract binaries, language data, and install hints before users run extraction.
 - Implemented layout recovery heuristics that use OCR line bounding boxes to detect columns, headings, and paragraphs, then export Markdown and DOCX.
 - Added searchable PDF export with hidden OCR text layers plus OCR readability metrics such as confidence, edit distance, CER, and textline horizontal score.
 

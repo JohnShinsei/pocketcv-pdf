@@ -14,9 +14,34 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from clearscan_cv.ocr import OcrLine, OcrResult, OcrWord, recover_layout_markdown  # noqa: E402
+from clearscan_cv.ocr import ocr_engine_status  # noqa: E402
 
 
 class OcrTest(unittest.TestCase):
+    def test_ocr_engine_status_reports_install_hints(self) -> None:
+        status = ocr_engine_status(language="jpn+eng")
+
+        self.assertIn("engines", status)
+        self.assertIn("rapidocr", status["engines"])
+        self.assertIn("tesseract", status["engines"])
+        self.assertIn("paddleocr", status["engines"])
+        self.assertIn("install", status["engines"]["rapidocr"])
+        self.assertEqual(status["requested_language"], "jpn+eng")
+
+    def test_cli_ocr_status_does_not_require_input_image(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "-m", "clearscan_cv.cli", "--ocr-status", "--ocr-lang", "jpn+eng"],
+            cwd=ROOT,
+            env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn('"engines"', completed.stdout)
+        self.assertIn('"tesseract"', completed.stdout)
+
     def test_ocr_result_serializes_line_boxes(self) -> None:
         word = OcrWord(text="PocketCV", confidence=91.5, bbox=(12, 20, 80, 18))
         line = OcrLine(text="PocketCV PDF", confidence=90.0, bbox=(12, 20, 140, 18), words=[word])

@@ -9,13 +9,13 @@ import numpy as np
 
 from .evaluation import evaluate_readability
 from .export import write_docx, write_pdf
-from .ocr import OcrUnavailableError, recognize_image, recover_layout_markdown
+from .ocr import OcrUnavailableError, ocr_engine_status, recognize_image, recover_layout_markdown
 from .pipeline import process_file
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Enhance document photos and generate an image quality report.")
-    parser.add_argument("input", help="Path to an input image.")
+    parser.add_argument("input", nargs="?", help="Path to an input image.")
     parser.add_argument("--out", default="outputs", help="Output directory.")
     parser.add_argument("--mode", choices=["color", "gray", "binary"], default="color", help="Output style.")
     parser.add_argument("--no-warp", action="store_true", help="Disable automatic perspective correction.")
@@ -25,6 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--searchable-pdf", action="store_true", help="Run OCR and write a searchable PDF text layer.")
     parser.add_argument("--ocr", action="store_true", help="Run optional OCR on the processed scan and write a TXT file.")
     parser.add_argument("--ocr-lang", default="jpn+eng", help="OCR language code, for example jpn+eng, eng, chi_sim+eng.")
+    parser.add_argument("--ocr-status", action="store_true", help="Print OCR backend availability and installation hints.")
     parser.add_argument("--expected-text", help="Path to reference text for OCR edit distance and CER evaluation.")
     parser.add_argument("--readability", action="store_true", help="Add OCR/readability metrics to the report.")
     parser.add_argument(
@@ -49,6 +50,12 @@ def _read_image(path: str | Path) -> np.ndarray:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.ocr_status:
+        print(json.dumps(ocr_engine_status(language=args.ocr_lang), indent=2))
+        return 0
+    if not args.input:
+        parser.error("input is required unless --ocr-status is used")
+
     report = process_file(
         input_path=args.input,
         output_dir=args.out,
@@ -84,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
             if layout_markdown is None:
                 layout_markdown = recover_layout_markdown(ocr_result)
             docx_path = output_path.with_name(f"{output_path.stem}_layout.docx")
-            docx_export = write_docx(layout_markdown or ocr_result.text, docx_path, title=Path(args.input).stem)
+            docx_export = write_docx(layout_markdown or ocr_result.text, docx_path, title=Path(str(args.input)).stem)
             report["docx"] = docx_export.to_dict()
             report["docx_path"] = str(docx_path)
 
@@ -100,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         pdf_export = write_pdf(
             output_image,
             pdf_path,
-            title=Path(args.input).stem,
+            title=Path(str(args.input)).stem,
             ocr_result=ocr_result,
             searchable=args.searchable_pdf,
         )

@@ -8,7 +8,7 @@ import numpy as np
 
 from .evaluation import evaluate_readability
 from .export import build_docx_bytes, build_pdf_bytes
-from .ocr import OcrUnavailableError, recognize_image, recover_layout_markdown
+from .ocr import OcrUnavailableError, ocr_engine_status, recognize_image, recover_layout_markdown
 from .pipeline import enhance_image
 
 try:
@@ -49,6 +49,11 @@ def service_worker() -> Response:
         media_type="application/javascript",
         headers={"Service-Worker-Allowed": "/"},
     )
+
+
+@app.get("/api/ocr/status")
+def ocr_status(language: str = "jpn+eng") -> dict[str, object]:
+    return ocr_engine_status(language=language)
 
 
 @app.post("/api/process")

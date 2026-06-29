@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass, field
+import importlib.util
 import re
+import shutil
+import subprocess
+import sys
 from typing import Literal
 
 import cv2
@@ -64,6 +68,75 @@ class OcrResult:
             "height": self.height,
             "lines": [line.to_dict() for line in self.lines],
         }
+
+
+def _has_module(name: str) -> bool:
+    return importlib.util.find_spec(name) is not None
+
+
+def _tesseract_languages() -> list[str]:
+    executable = shutil.which("tesseract")
+    if not executable:
+        return []
+    try:
+        completed = subprocess.run(
+            [executable, "--list-langs"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=8,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if completed.returncode != 0:
+        return []
+    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    return sorted(line for line in lines if not line.lower().startswith("list of available"))
+
+
+def _split_language_codes(language: str) -> list[str]:
+    return [part.strip() for part in re.split(r"[+,]", language) if part.strip()]
+
+
+def ocr_engine_status(language: str = "jpn+eng") -> dict[str, object]:
+    tesseract_binary = shutil.which("tesseract")
+    tesseract_languages = _tesseract_languages()
+    requested_languages = _split_language_codes(language)
+    missing_tesseract_languages = [
+        code for code in requested_languages if tesseract_languages and code not in tesseract_languages
+    ]
+    rapidocr_package = "rapidocr_onnxruntime" if _has_module("rapidocr_onnxruntime") else "rapidocr" if _has_module("rapidocr") else None
+    engines: dict[str, dict[str, object]] = {
+        "rapidocr": {
+            "available": rapidocr_package is not None,
+            "package": rapidocr_package,
+            "install": "pip install -e .[rapidocr]",
+            "note": "ONNX Runtime based OCR adapter.",
+        },
+        "tesseract": {
+            "available": _has_module("pytesseract") and tesseract_binary is not None and not missing_tesseract_languages,
+            "python_package": _has_module("pytesseract"),
+            "binary": tesseract_binary,
+            "languages": tesseract_languages,
+            "missing_languages": missing_tesseract_languages,
+            "install": "pip install -e .[ocr], then install Tesseract OCR and language data.",
+            "note": "Best lightweight local option for Japanese when jpn language data is installed.",
+        },
+        "paddleocr": {
+            "available": _has_module("paddleocr"),
+            "package": "paddleocr" if _has_module("paddleocr") else None,
+            "install": "pip install -e .[paddleocr]",
+            "note": "Heavier OCR/document parsing backend.",
+        },
+    }
+    usable_engines = [name for name, payload in engines.items() if payload["available"]]
+    return {
+        "python": sys.version.split()[0],
+        "requested_language": language,
+        "engines": engines,
+        "usable_engines": usable_engines,
+        "recommended_engine": usable_engines[0] if usable_engines else None,
+    }
 
 
 def _mean_confidence(values: list[float | None]) -> float | None:
