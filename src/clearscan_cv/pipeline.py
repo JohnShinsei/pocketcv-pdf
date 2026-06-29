@@ -11,6 +11,7 @@ import numpy as np
 from .corners import CornerPoints, manual_detection_from_corners, scale_corner_points
 from .dewarp import dewarp_by_textline_columns
 from .geometry import detect_document_corners, ensure_bgr, four_point_transform
+from .model_hooks import apply_external_image_hook
 from .quality import assess_quality, compare_quality, diagnose_scan_quality
 
 OutputMode = Literal["auto", "color", "gray", "binary"]
@@ -459,6 +460,8 @@ def enhance_image(
     auto_dewarp: bool = True,
     manual_corners: CornerPoints | None = None,
     manual_corners_space: CornerCoordinateSpace = "input",
+    external_restorer_command: str | None = None,
+    external_restorer_timeout: float = 180.0,
 ) -> EnhancementResult:
     if mode not in {"auto", "color", "gray", "binary"}:
         raise ValueError("mode must be one of: auto, color, gray, binary")
@@ -482,18 +485,25 @@ def enhance_image(
     dewarp_result = dewarp_by_textline_columns(warped) if auto_dewarp else None
     dewarped = dewarp_result.image if dewarp_result is not None else warped
     deskewed, deskew_report = deskew_by_text_lines(dewarped)
-    enhanced = normalize_illumination(deskewed)
+    external_result = apply_external_image_hook(
+        deskewed,
+        external_restorer_command,
+        stage="external_restorer",
+        timeout_seconds=external_restorer_timeout,
+    )
+    restored = external_result.image
+    enhanced = normalize_illumination(restored)
 
     selected_mode = mode
     auto_selection: dict[str, object] | None = None
     if mode == "auto":
         gray_output = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
-        binary_output = to_clean_binary(deskewed)
+        binary_output = to_clean_binary(restored)
         perspective_confidence = float(detection.confidence) if detection.found else 0.0
         selected_mode, auto_selection = _auto_mode_choice(assess_quality(binary_output), assess_quality(gray_output), perspective_confidence)
         output = gray_output if selected_mode == "gray" else binary_output
     elif mode == "binary":
-        output = to_clean_binary(deskewed)
+        output = to_clean_binary(restored)
     elif mode == "gray":
         output = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
     else:
@@ -514,6 +524,7 @@ def enhance_image(
         "document_detection": detection.to_dict(),
         "dewarp": dewarp_result.report if dewarp_result is not None else {"applied": False, "method": "disabled"},
         "deskew": deskew_report,
+        "external_restorer": external_result.report,
         "quality": compare_quality(deskewed, quality_after),
         "output_quality": output_quality,
         "quality_diagnostics": diagnose_scan_quality(
@@ -525,6 +536,7 @@ def enhance_image(
             "perspective_correction",
             "textline_dewarp",
             "textline_deskew",
+            "external_restorer" if external_restorer_command else "external_restorer_disabled",
             "illumination_normalization",
             selected_mode,
         ],
@@ -542,6 +554,8 @@ def process_file(
     manual_corners: CornerPoints | None = None,
     manual_corners_space: CornerCoordinateSpace = "input",
     output_stem: str | None = None,
+    external_restorer_command: str | None = None,
+    external_restorer_timeout: float = 180.0,
 ) -> dict[str, object]:
     input_path = Path(input_path)
     output_dir = Path(output_dir)
@@ -559,6 +573,8 @@ def process_file(
         auto_dewarp=auto_dewarp,
         manual_corners=manual_corners,
         manual_corners_space=manual_corners_space,
+        external_restorer_command=external_restorer_command,
+        external_restorer_timeout=external_restorer_timeout,
     )
     stem = output_stem or input_path.stem
     output_path = output_dir / f"{stem}_clearscan.png"

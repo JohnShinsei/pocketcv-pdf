@@ -22,6 +22,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-warp", action="store_true", help="Disable automatic perspective correction.")
     parser.add_argument("--no-dewarp", action="store_true", help="Disable lightweight textline dewarping.")
     parser.add_argument(
+        "--external-restorer-command",
+        help="Trusted local command for an optional deep restoration stage. Use {input} and {output} placeholders.",
+    )
+    parser.add_argument("--external-restorer-timeout", type=float, default=180.0, help="Timeout in seconds for the external restorer command.")
+    parser.add_argument(
         "--corners",
         help='Manual document corners in input-image coordinates, for example "10,20 300,18 310,420 8,430" or JSON.',
     )
@@ -94,6 +99,8 @@ def main(argv: list[str] | None = None) -> int:
                 auto_dewarp=not args.no_dewarp,
                 side_by_side=args.compare,
                 output_stem=output_stem,
+                external_restorer_command=args.external_restorer_command,
+                external_restorer_timeout=args.external_restorer_timeout,
             )
             page_report["page_index"] = page_index
             page_output_path = Path(str(page_report["output_path"]))
@@ -177,6 +184,8 @@ def main(argv: list[str] | None = None) -> int:
         side_by_side=args.compare,
         manual_corners=manual_corners,
         manual_corners_space=args.corners_space,
+        external_restorer_command=args.external_restorer_command,
+        external_restorer_timeout=args.external_restorer_timeout,
     )
     output_path = Path(str(report["output_path"]))
     output_image: np.ndarray | None = None

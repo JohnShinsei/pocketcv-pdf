@@ -40,6 +40,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-dewarp", action="store_true", help="Disable lightweight textline dewarping.")
     parser.add_argument("--no-warp", action="store_true", help="Disable automatic perspective correction.")
     parser.add_argument(
+        "--external-restorer-command",
+        help="Trusted local command for an optional deep restoration stage. Use {input} and {output} placeholders.",
+    )
+    parser.add_argument("--external-restorer-timeout", type=float, default=180.0, help="Timeout in seconds for the external restorer command.")
+    parser.add_argument(
         "--corners",
         help='Manual document corners in input-image coordinates, for example "10,20 300,18 310,420 8,430" or JSON.',
     )
@@ -120,6 +125,8 @@ def run_demo(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         side_by_side=True,
         manual_corners=manual_corners,
         manual_corners_space=args.corners_space,
+        external_restorer_command=args.external_restorer_command,
+        external_restorer_timeout=args.external_restorer_timeout,
     )
     output_path = Path(str(scan_report["output_path"]))
     output_image = read_image(output_path)
@@ -144,6 +151,7 @@ def run_demo(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "document_detection": scan_report.get("document_detection"),
         "dewarp": scan_report.get("dewarp"),
         "deskew": scan_report.get("deskew"),
+        "external_restorer": scan_report.get("external_restorer"),
         "quality": scan_report.get("quality"),
         "output_quality": scan_report.get("output_quality"),
         "quality_diagnostics": scan_report.get("quality_diagnostics"),

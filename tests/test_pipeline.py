@@ -197,6 +197,34 @@ def make_near_edge_artifact_page() -> np.ndarray:
     return image
 
 
+def make_external_restorer_command(script_path: Path, *, should_fail: bool = False) -> str:
+    if should_fail:
+        script_path.write_text("import sys\nsys.exit(7)\n", encoding="utf-8")
+    else:
+        script_path.write_text(
+            "\n".join(
+                [
+                    "import sys",
+                    "import cv2",
+                    "import numpy as np",
+                    "raw = np.fromfile(sys.argv[1], dtype=np.uint8)",
+                    "image = cv2.imdecode(raw, cv2.IMREAD_COLOR)",
+                    "if image is None:",
+                    "    raise SystemExit(3)",
+                    "gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)",
+                    "restored = cv2.cvtColor(np.full_like(gray, 246), cv2.COLOR_GRAY2BGR)",
+                    "cv2.putText(restored, 'HOOK', (40, 92), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (25, 25, 25), 3, cv2.LINE_AA)",
+                    "ok, encoded = cv2.imencode('.png', restored)",
+                    "if not ok:",
+                    "    raise SystemExit(4)",
+                    "encoded.tofile(sys.argv[2])",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    return f'"{sys.executable}" "{script_path}" {{input}} {{output}}'
+
+
 class PipelineTest(unittest.TestCase):
     def test_detects_document_quad(self) -> None:
         detection = detect_document_corners(make_synthetic_document())
@@ -358,6 +386,28 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(result.report["auto_selection"]["selected_mode"], "gray")  # type: ignore[index]
         self.assertEqual(result.report["quality_diagnostics"]["status"], "ready")  # type: ignore[index]
         self.assertEqual(result.image.ndim, 2)
+
+    def test_external_restorer_hook_applies_between_geometry_and_enhancement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            command = make_external_restorer_command(Path(tmp) / "fake_restorer.py")
+            result = enhance_image(make_synthetic_document(), mode="gray", auto_warp=False, external_restorer_command=command)
+
+        report = result.report["external_restorer"]
+        self.assertTrue(report["applied"])  # type: ignore[index]
+        self.assertEqual(report["method"], "external_command")  # type: ignore[index]
+        self.assertIn("external_restorer", result.report["pipeline"])
+        self.assertIn("output_size", report)  # type: ignore[operator]
+
+    def test_external_restorer_hook_falls_back_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            command = make_external_restorer_command(Path(tmp) / "failing_restorer.py", should_fail=True)
+            result = enhance_image(make_synthetic_document(), mode="gray", auto_warp=False, external_restorer_command=command)
+
+        report = result.report["external_restorer"]
+        self.assertFalse(report["applied"])  # type: ignore[index]
+        self.assertEqual(report["reason"], "nonzero_exit")  # type: ignore[index]
+        self.assertEqual(report["returncode"], 7)  # type: ignore[index]
+        self.assertGreater(result.image.shape[0], 100)
 
     def test_quality_metrics_report_shadow_and_boldness_risk(self) -> None:
         page = make_heavy_shadow_page()
