@@ -25,7 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("input", nargs="?", help="Path to a document photo. If omitted, a synthetic demo photo is generated.")
     parser.add_argument("--out", default="outputs/demo", help="Output directory for demo artifacts.")
-    parser.add_argument("--mode", choices=["color", "gray", "binary"], default="binary", help="Scan output style.")
+    parser.add_argument("--mode", choices=["auto", "color", "gray", "binary"], default="auto", help="Scan output style.")
     parser.add_argument("--ocr-lang", default="jpn+eng", help="OCR language code, for example jpn+eng, eng, chi_sim+eng.")
     parser.add_argument(
         "--ocr-engine",
@@ -134,6 +134,8 @@ def run_demo(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "input_path": str(input_path),
         "output_dir": str(output_dir),
         "mode": args.mode,
+        "selected_mode": scan_report.get("selected_mode"),
+        "auto_selection": scan_report.get("auto_selection"),
         "artifacts": artifacts,
         "manual_corners": scan_report.get("manual_corners"),
         "manual_corners_space": scan_report.get("manual_corners_space"),
@@ -144,6 +146,7 @@ def run_demo(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "deskew": scan_report.get("deskew"),
         "quality": scan_report.get("quality"),
         "output_quality": scan_report.get("output_quality"),
+        "quality_diagnostics": scan_report.get("quality_diagnostics"),
         "ocr_status": ocr_engine_status(language=args.ocr_lang),
     }
 

@@ -738,6 +738,7 @@
           <label class="mode-wrap">
             <span class="mode-label">処理モード</span>
             <select id="mode" class="mode" aria-label="処理モード">
+              <option value="auto">おすすめ自動</option>
               <option value="binary">白黒スキャン</option>
               <option value="gray">グレースキャン</option>
               <option value="color">カラースキャン</option>
@@ -3244,7 +3245,41 @@
         return { shadowResidual, shadowScore, inkDensity, boldnessRisk, paperGrayResidue };
       }
 
+      function qualityIssueLabel(advice) {
+        return advice && advice.label ? advice.label : "出力OK";
+      }
+
+      function chooseAutoScanCandidate(binaryCandidate, grayCandidate) {
+        const binaryAdvice = scanQualityAdvice(binaryCandidate.metrics);
+        const grayAdvice = scanQualityAdvice(grayCandidate.metrics);
+        const binaryScore = binaryCandidate.metrics.qualityScore;
+        const grayScore = grayCandidate.metrics.qualityScore;
+        const fragileBinary =
+          binaryAdvice.label === "影ムラ強め" ||
+          binaryAdvice.label === "文字太り注意" ||
+          binaryAdvice.label === "再撮影推奨";
+        const grayClearlyBetter = binaryAdvice.status !== "ready" && grayAdvice.status === "ready" && grayScore > binaryScore + 4;
+        const chooseGray =
+          (fragileBinary && grayScore >= binaryScore - 8) || grayClearlyBetter || (binaryScore < 55 && grayScore > binaryScore + 4);
+        const selected = chooseGray ? grayCandidate : binaryCandidate;
+        selected.metrics.requestedMode = "auto";
+        selected.metrics.selectedMode = chooseGray ? "gray" : "binary";
+        selected.metrics.autoSelection = {
+          selectedMode: selected.metrics.selectedMode,
+          binaryScore,
+          grayScore,
+          binaryAdvice: qualityIssueLabel(binaryAdvice),
+          grayAdvice: qualityIssueLabel(grayAdvice),
+          reason: chooseGray ? "gray_preserves_fragile_text" : "binary_scan_is_readable",
+        };
+        return selected;
+      }
+
       function enhanceCanvas(sourceCanvas, mode, detection) {
+        if (mode === "auto") {
+          return chooseAutoScanCandidate(enhanceCanvas(sourceCanvas, "binary", detection), enhanceCanvas(sourceCanvas, "gray", detection));
+        }
+
         const renderMode = mode === "report" ? "color" : mode;
         const output = document.createElement("canvas");
         output.width = sourceCanvas.width;
@@ -3540,6 +3575,9 @@
             inkDensity: scanMetrics.inkDensity,
             boldnessRisk: scanMetrics.boldnessRisk,
             paperGrayResidue: scanMetrics.paperGrayResidue,
+            requestedMode: mode,
+            selectedMode: renderMode,
+            autoSelection: null,
           },
         };
       }
@@ -3590,6 +3628,7 @@
           ["総合品質", `${Math.round(metrics.qualityScore)} / 100`],
           ["診断", advice.label],
           ["推奨操作", advice.action],
+          ["自動選択", metrics.autoSelection ? `${metrics.autoSelection.selectedMode}` : `${metrics.selectedMode || "-"}`],
           ["透視補正信頼度", `${Math.round(metrics.perspectiveConfidence * 100)}%`],
           ["文字行傾き補正", `${Math.round((metrics.deskewAngle || 0) * 10) / 10}°`],
           ["影ムラ残り", `${Math.round((metrics.shadowResidual || 0) * 10) / 10}`],

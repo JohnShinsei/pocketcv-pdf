@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Enhance document photos and generate an image quality report.")
     parser.add_argument("inputs", nargs="*", help="Path to one or more input images.")
     parser.add_argument("--out", default="outputs", help="Output directory.")
-    parser.add_argument("--mode", choices=["color", "gray", "binary"], default="color", help="Output style.")
+    parser.add_argument("--mode", choices=["auto", "color", "gray", "binary"], default="auto", help="Output style.")
     parser.add_argument("--no-warp", action="store_true", help="Disable automatic perspective correction.")
     parser.add_argument("--no-dewarp", action="store_true", help="Disable lightweight textline dewarping.")
     parser.add_argument(

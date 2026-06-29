@@ -67,7 +67,7 @@ def ocr_status(language: str = "jpn+eng") -> dict[str, object]:
 @app.post("/api/process")
 async def process_upload(
     file: UploadFile = File(...),
-    mode: str = Form("color"),
+    mode: str = Form("auto"),
     auto_warp: bool = Form(True),
     auto_dewarp: bool = Form(True),
     corners: str | None = Form(None),
@@ -139,7 +139,7 @@ async def process_upload(
 @app.post("/api/process-batch")
 async def process_batch_upload(
     files: list[UploadFile] = File(...),
-    mode: str = Form("color"),
+    mode: str = Form("auto"),
     auto_warp: bool = Form(True),
     auto_dewarp: bool = Form(True),
     ocr: bool = Form(False),

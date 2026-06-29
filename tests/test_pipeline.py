@@ -350,6 +350,15 @@ class PipelineTest(unittest.TestCase):
         self.assertLess(after_delta, 18)
         self.assertGreater(float(np.std(text_region)), 35)
 
+    def test_auto_mode_selects_more_readable_scan_variant(self) -> None:
+        result = enhance_image(make_heavy_shadow_page(), mode="auto", auto_warp=False)
+
+        self.assertEqual(result.report["mode"], "auto")
+        self.assertEqual(result.report["selected_mode"], "gray")
+        self.assertEqual(result.report["auto_selection"]["selected_mode"], "gray")  # type: ignore[index]
+        self.assertEqual(result.report["quality_diagnostics"]["status"], "ready")  # type: ignore[index]
+        self.assertEqual(result.image.ndim, 2)
+
     def test_quality_metrics_report_shadow_and_boldness_risk(self) -> None:
         page = make_heavy_shadow_page()
         raw = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
@@ -450,6 +459,11 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("buildAnalysisCanvas", html)
         self.assertIn("warpPerspectiveCanvas", html)
         self.assertIn("edgeCanvas", html)
+        self.assertIn('option value="auto"', html)
+        self.assertIn("おすすめ自動", html)
+        self.assertIn("chooseAutoScanCandidate", html)
+        self.assertIn("gray_preserves_fragile_text", html)
+        self.assertIn("selectedMode", html)
         self.assertIn("qualityScore", html)
         self.assertIn("assessOutputScanMetrics", html)
         self.assertIn("scanQualityAdvice", html)
@@ -594,7 +608,7 @@ class PipelineTest(unittest.TestCase):
         worker = (ROOT / "src" / "clearscan_cv" / "static" / "sw.js").read_text(encoding="utf-8")
 
         self.assertIn("CACHE_NAME", worker)
-        self.assertIn("pocketcv-pdf-v17", worker)
+        self.assertIn("pocketcv-pdf-v18", worker)
         self.assertIn("install", worker)
         self.assertIn("fetch", worker)
         self.assertIn("event.request.mode === \"navigate\"", worker)

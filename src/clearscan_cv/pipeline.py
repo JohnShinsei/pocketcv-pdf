@@ -13,7 +13,7 @@ from .dewarp import dewarp_by_textline_columns
 from .geometry import detect_document_corners, ensure_bgr, four_point_transform
 from .quality import assess_quality, compare_quality, diagnose_scan_quality
 
-OutputMode = Literal["color", "gray", "binary"]
+OutputMode = Literal["auto", "color", "gray", "binary"]
 CornerCoordinateSpace = Literal["input", "processed"]
 MAX_PROCESS_IMAGE_EDGE = 3200
 MAX_PROCESS_IMAGE_PIXELS = 6_500_000
@@ -284,6 +284,41 @@ def deskew_by_text_lines(image: np.ndarray) -> tuple[np.ndarray, dict[str, float
     return rotate_image_keep_content(image, angle), {"angle": angle, "confidence": confidence}
 
 
+def _quality_issue_codes(diagnostics: dict[str, object]) -> set[str]:
+    issues = diagnostics.get("issues")
+    if not isinstance(issues, list):
+        return set()
+    codes: set[str] = set()
+    for issue in issues:
+        if isinstance(issue, dict) and isinstance(issue.get("code"), str):
+            codes.add(str(issue["code"]))
+    return codes
+
+
+def _auto_mode_choice(binary_quality: dict[str, object], gray_quality: dict[str, object], perspective_confidence: float) -> tuple[str, dict[str, object]]:
+    binary_diagnostics = diagnose_scan_quality(binary_quality, perspective_confidence=perspective_confidence)
+    gray_diagnostics = diagnose_scan_quality(gray_quality, perspective_confidence=perspective_confidence)
+    binary_score = float(binary_quality["score"])
+    gray_score = float(gray_quality["score"])
+    binary_issue_codes = _quality_issue_codes(binary_diagnostics)
+    fragile_binary_codes = {"shadow_residual", "bold_text", "low_quality"}
+    choose_gray = bool(binary_issue_codes & fragile_binary_codes) and gray_score >= binary_score - 8.0
+    if binary_diagnostics["status"] != "ready" and gray_diagnostics["status"] == "ready" and gray_score > binary_score + 4.0:
+        choose_gray = True
+    if binary_score < 55.0 and gray_score > binary_score + 4.0:
+        choose_gray = True
+
+    selected = "gray" if choose_gray else "binary"
+    return selected, {
+        "selected_mode": selected,
+        "binary_score": round(binary_score, 2),
+        "gray_score": round(gray_score, 2),
+        "binary_status": binary_diagnostics["status"],
+        "gray_status": gray_diagnostics["status"],
+        "reason": "gray_preserves_fragile_text" if selected == "gray" else "binary_scan_is_readable",
+    }
+
+
 def normalize_illumination(image: np.ndarray) -> np.ndarray:
     bgr = ensure_bgr(image)
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
@@ -425,8 +460,8 @@ def enhance_image(
     manual_corners: CornerPoints | None = None,
     manual_corners_space: CornerCoordinateSpace = "input",
 ) -> EnhancementResult:
-    if mode not in {"color", "gray", "binary"}:
-        raise ValueError("mode must be one of: color, gray, binary")
+    if mode not in {"auto", "color", "gray", "binary"}:
+        raise ValueError("mode must be one of: auto, color, gray, binary")
     if manual_corners_space not in {"input", "processed"}:
         raise ValueError("manual_corners_space must be input or processed")
 
@@ -449,17 +484,27 @@ def enhance_image(
     deskewed, deskew_report = deskew_by_text_lines(dewarped)
     enhanced = normalize_illumination(deskewed)
 
-    if mode == "binary":
+    selected_mode = mode
+    auto_selection: dict[str, object] | None = None
+    if mode == "auto":
+        gray_output = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
+        binary_output = to_clean_binary(deskewed)
+        perspective_confidence = float(detection.confidence) if detection.found else 0.0
+        selected_mode, auto_selection = _auto_mode_choice(assess_quality(binary_output), assess_quality(gray_output), perspective_confidence)
+        output = gray_output if selected_mode == "gray" else binary_output
+    elif mode == "binary":
         output = to_clean_binary(deskewed)
     elif mode == "gray":
         output = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
     else:
         output = enhanced
 
-    quality_after = enhanced if mode == "binary" else output
+    quality_after = enhanced if selected_mode == "binary" else output
     output_quality = assess_quality(output)
     report = {
         "mode": mode,
+        "selected_mode": selected_mode,
+        "auto_selection": auto_selection,
         "auto_warp": auto_warp,
         "auto_dewarp": auto_dewarp,
         "manual_corners": manual_corners is not None,
@@ -475,7 +520,14 @@ def enhance_image(
             output_quality,
             perspective_confidence=float(detection.confidence) if detection.found else 0.0,
         ),
-        "pipeline": ["document_detection", "perspective_correction", "textline_dewarp", "textline_deskew", "illumination_normalization", mode],
+        "pipeline": [
+            "document_detection",
+            "perspective_correction",
+            "textline_dewarp",
+            "textline_deskew",
+            "illumination_normalization",
+            selected_mode,
+        ],
     }
     return EnhancementResult(image=output, report=report)
 
