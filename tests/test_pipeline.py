@@ -24,6 +24,7 @@ from clearscan_cv.pipeline import (  # noqa: E402
     _auto_mode_choice,
     deskew_by_text_lines,
     enhance_image,
+    estimate_rough_foreground_mask,
     estimate_hough_textline_skew,
     estimate_textline_skew,
     limit_image_resolution,
@@ -491,6 +492,20 @@ class PipelineTest(unittest.TestCase):
         self.assertGreater(before_delta, 50)
         self.assertLess(after_delta, 18)
         self.assertGreater(float(np.std(text_region)), 35)
+
+    def test_gray_enhancement_uses_foreground_aware_background_on_textlike_shadow(self) -> None:
+        page = make_shadowed_noisy_page()
+        raw = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
+        corrected = enhance_image(page, mode="gray", auto_warp=False, auto_dewarp=False).image
+        raw_quality = assess_quality(raw)
+        corrected_quality = assess_quality(corrected)
+        foreground_ratio = float(np.mean(estimate_rough_foreground_mask(raw)))
+        text_region = corrected[90:500, 100:790]
+
+        self.assertGreater(foreground_ratio, 0.04)
+        self.assertLess(foreground_ratio, 0.34)
+        self.assertLess(float(corrected_quality["shadow_residual"]), float(raw_quality["shadow_residual"]) * 0.45)
+        self.assertGreater(float(np.std(text_region)), 30.0)
 
     def test_auto_mode_selects_more_readable_scan_variant(self) -> None:
         result = enhance_image(make_heavy_shadow_page(), mode="auto", auto_warp=False)

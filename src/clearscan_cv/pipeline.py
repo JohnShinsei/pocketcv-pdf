@@ -130,6 +130,20 @@ def estimate_gatos_background(gray: np.ndarray, foreground_mask: np.ndarray) -> 
     return np.clip(background, 1, 255).astype(np.uint8)
 
 
+def estimate_rough_foreground_mask(gray: np.ndarray) -> np.ndarray:
+    denoised = cv2.bilateralFilter(gray, 5, 24, 24)
+    rough_block_size = _odd_kernel(int(min(gray.shape[:2]) / 18), minimum=41, maximum=161)
+    rough_float = denoised.astype(np.float32)
+    rough_mean = cv2.boxFilter(rough_float, cv2.CV_32F, (rough_block_size, rough_block_size), normalize=True)
+    rough_sq_mean = cv2.boxFilter(rough_float * rough_float, cv2.CV_32F, (rough_block_size, rough_block_size), normalize=True)
+    rough_std = np.sqrt(np.maximum(0.0, rough_sq_mean - rough_mean * rough_mean))
+    otsu_seed_threshold, _ = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    foreground = ((rough_mean - rough_float) > np.maximum(10.0, rough_std * 0.35 + 4.0)) | (
+        rough_float < min(float(otsu_seed_threshold) - 8.0, 158.0)
+    )
+    return foreground
+
+
 def sauvola_threshold(gray_float: np.ndarray, window_size: int, k: float = 0.28, r: float = 128.0) -> np.ndarray:
     window_size = _odd_kernel(window_size, minimum=15, maximum=251)
     mean = cv2.boxFilter(gray_float, cv2.CV_32F, (window_size, window_size), normalize=True)
@@ -333,7 +347,17 @@ def normalize_illumination(image: np.ndarray) -> np.ndarray:
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
     lightness, channel_a, channel_b = cv2.split(lab)
 
-    if should_use_frequency_deshadow(lightness):
+    rough_foreground = estimate_rough_foreground_mask(lightness)
+    gatos_background = estimate_gatos_background(lightness, rough_foreground)
+    raw_range = float(np.percentile(lightness, 95) - np.percentile(lightness, 20))
+    background_range = float(np.percentile(gatos_background, 95) - np.percentile(gatos_background, 5))
+    foreground_ratio = float(np.mean(rough_foreground))
+    foreground_density_is_textlike = 0.018 <= foreground_ratio <= 0.34
+    use_gatos_background = foreground_density_is_textlike and (background_range > 22.0 or raw_range > 42.0)
+    if use_gatos_background:
+        normalized = cv2.divide(lightness, np.maximum(gatos_background, 1), scale=252)
+        normalized = preserve_high_frequency_detail(lightness, np.clip(normalized, 0, 255).astype(np.uint8), amount=0.24)
+    elif should_use_frequency_deshadow(lightness):
         normalized = deshadow_luminance(lightness, scale=252)
     else:
         normalized = normalize_shadow_luminance(lightness, scale=252)
@@ -432,15 +456,7 @@ def to_clean_binary(image: np.ndarray) -> np.ndarray:
     bgr = ensure_bgr(image)
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     denoised = cv2.bilateralFilter(gray, 5, 24, 24)
-    rough_block_size = _odd_kernel(int(min(gray.shape[:2]) / 18), minimum=41, maximum=161)
-    rough_float = denoised.astype(np.float32)
-    rough_mean = cv2.boxFilter(rough_float, cv2.CV_32F, (rough_block_size, rough_block_size), normalize=True)
-    rough_sq_mean = cv2.boxFilter(rough_float * rough_float, cv2.CV_32F, (rough_block_size, rough_block_size), normalize=True)
-    rough_std = np.sqrt(np.maximum(0.0, rough_sq_mean - rough_mean * rough_mean))
-    otsu_seed_threshold, _ = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    rough_foreground = ((rough_mean - rough_float) > np.maximum(10.0, rough_std * 0.35 + 4.0)) | (
-        rough_float < min(float(otsu_seed_threshold) - 8.0, 158.0)
-    )
+    rough_foreground = estimate_rough_foreground_mask(denoised)
     gatos_background = estimate_gatos_background(denoised, rough_foreground)
     raw_range = float(np.percentile(denoised, 95) - np.percentile(denoised, 20))
     background_range = float(np.percentile(gatos_background, 95) - np.percentile(gatos_background, 5))
