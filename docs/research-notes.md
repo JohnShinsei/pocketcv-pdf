@@ -41,17 +41,20 @@ PocketCV PDF は、スマートフォンや PC ブラウザで完結する文書
 
 退化が強いページでは Gatos-style の背景表面推定も使います。粗い前景 mask を作り、文字領域を inpaint してから低周波背景面を推定し、`gray / background * 255` で光照を正規化します。その後、小窓・大窓の Sauvola 閾値を補助的に使い、小さな文字と低コントラスト文字を拾います。背景が均一な通常ページでは Sauvola を強く掛けず、文字が太りすぎる問題を避けます。
 
+重い影に対しては、文字を高周波成分、影を低周波照明場として分けます。形態学 close と大核 blur で低周波背景を作り、除算で紙面の明るさを戻した後、元画像の高周波 residual を少し戻して文字のエッジを保護します。背景範囲が小さい通常ページではこの強い去影を使わず、不要な太字化を避けます。
+
 実装箇所:
 
-- `src/clearscan_cv/pipeline.py`: `estimate_gatos_background`, `sauvola_threshold`, `to_clean_binary`
-- `src/clearscan_cv/static/index.html`: tile background 推定、`sauvolaThresholdValue`, `paperNoiseGuard`, `strokeContrast`
-- テスト: 影付き・紙纹ノイズ付きページ、低コントラスト退化ページ、抗エイリアス文字ページで、空白領域・文字保持・太字化抑制を確認
+- `src/clearscan_cv/pipeline.py`: `deshadow_luminance`, `preserve_high_frequency_detail`, `estimate_gatos_background`, `sauvola_threshold`, `to_clean_binary`
+- `src/clearscan_cv/static/index.html`: tile background 推定、`useFrequencyDeshadow`, `sauvolaThresholdValue`, `paperNoiseGuard`, `strokeContrast`
+- テスト: 重影ページ、影付き・紙纹ノイズ付きページ、低コントラスト退化ページ、抗エイリアス文字ページで、空白領域・文字保持・太字化抑制を確認
 
 参照した考え方:
 
 - Anvari and Athitsos, "A Survey on Deep learning based Document Image Enhancement", 2021: 文書增强を二値化、去影、去ノイズ、文字可読性改善などの複合問題として整理。
 - Gatos et al., "Adaptive degraded document image binarization", 2006: 粗い前景推定、背景表面推定、背景に基づく閾値、後処理という退化文書向け二値化の流れ。
 - Sauvola and Pietikainen, "Adaptive document image binarization", 2000: 局所平均と標準偏差を使う局所閾値化。
+- Cun and Pun, "High-Resolution Document Shadow Removal via A Large-Scale Real-World Dataset and A Frequency-Aware Shadow Erasing Net", ICCV 2023: 低周波影を消し、高周波の文字・図形境界を保護する設計思想。
 - Li et al., "Document Rectification and Illumination Correction using a Patch-based CNN", 2019: 幾何補正と光照補正を分離し、局所領域で補正する設計。
 - Feng et al., "DocTr", 2021: 幾何 unwarping と illumination correction を連結し、OCR 入力品質を上げる設計。
 
@@ -64,6 +67,7 @@ PocketCV PDF は、スマートフォンや PC ブラウザで完結する文書
 | 文書解析 | Zhang et al., "Document Parsing Unveiled", arXiv 2024 | OCR 後の Markdown 復元、段組み推定、将来の JSON/Word 出力のロードマップに反映。 |
 | 退化文書二値化 | Gatos et al., "Adaptive degraded document image binarization", Pattern Recognition 2006 | 粗い前景 mask から背景面を推定し、影・灰底・低コントラストに強い白黒スキャンを生成。 |
 | 局所閾値 | Sauvola and Pietikainen, "Adaptive document image binarization", Pattern Recognition 2000 | 小窓・大窓の局所平均/標準偏差から、退化ページだけ補助的に文字候補を拾う。 |
+| 重影除去 | Cun and Pun, "High-Resolution Document Shadow Removal via A Large-Scale Real-World Dataset and A Frequency-Aware Shadow Erasing Net", ICCV 2023 | 深度モデルは未同梱だが、低周波影と高周波文字を分ける考えを軽量 OpenCV/Canvas 処理に反映。 |
 | 透視補正 | Jagannathan and Jawahar, "Perspective Correction Methods for Camera-Based Document Analysis", CBDAR 2005 | Canny/contour に加え、文字行 deskew を追加。 |
 | モバイル透視補正 | Yin et al., "A Multi-Stage Strategy to Perspective Rectification for Mobile Phone Camera-Based Document Images", ICDAR 2007 | 境界検出、text baseline、block alignment を段階的に使う思想を、端末内の軽量 deskew として採用。 |
 | 深度 dewarp | Ma et al., "DocUNet", CVPR 2018 | 将来の曲面補正候補。現版ではモデルを同梱せず、四点透視補正と小角度 deskew に留める。 |
@@ -82,6 +86,7 @@ PocketCV PDF は、スマートフォンや PC ブラウザで完結する文書
 - Zhang, Q. et al. "Document Parsing Unveiled: Techniques, Challenges, and Prospects for Structured Information Extraction." arXiv:2410.21169, 2024. https://arxiv.org/abs/2410.21169
 - Gatos, B., Pratikakis, I., Perantonis, S. J. "Adaptive degraded document image binarization." Pattern Recognition, 2006. https://doi.org/10.1016/j.patcog.2005.09.010
 - Sauvola, J., Pietikainen, M. "Adaptive document image binarization." Pattern Recognition, 2000. https://doi.org/10.1016/S0031-3203(99)00055-2
+- Cun, X., Pun, C.-M. "High-Resolution Document Shadow Removal via A Large-Scale Real-World Dataset and A Frequency-Aware Shadow Erasing Net." ICCV, 2023. https://openaccess.thecvf.com/content/ICCV2023/html/Cun_High-Resolution_Document_Shadow_Removal_via_A_Large-Scale_Real-World_Dataset_and_ICCV_2023_paper.html
 - Jagannathan, L., Jawahar, C. V. "Perspective Correction Methods for Camera-Based Document Analysis." CBDAR, 2005. https://cvit.iiit.ac.in/images/ConferencePapers/2005/jagannathan05Perspective.pdf
 - Yin, X.-C. et al. "A Multi-Stage Strategy to Perspective Rectification for Mobile Phone Camera-Based Document Images." ICDAR, 2007. https://ieeexplore.ieee.org/document/4376980/
 - Ma, K. et al. "DocUNet: Document Image Unwarping via a Stacked U-Net." CVPR, 2018. https://openaccess.thecvf.com/content_cvpr_2018/html/Ma_DocUNet_Document_Image_CVPR_2018_paper.html

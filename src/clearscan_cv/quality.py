@@ -20,14 +20,20 @@ def assess_quality(image: np.ndarray) -> dict[str, float | int | str]:
     bgr = ensure_bgr(image)
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     height, width = gray.shape[:2]
+    scale = min(1.0, 1600.0 / float(max(height, width)))
+    metric_gray = (
+        cv2.resize(gray, (max(1, int(round(width * scale))), max(1, int(round(height * scale)))), interpolation=cv2.INTER_AREA)
+        if scale < 1.0
+        else gray
+    )
 
-    sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    contrast = float(gray.std())
-    brightness = float(gray.mean())
-    edges = cv2.Canny(gray, 80, 160)
+    sharpness = float(cv2.Laplacian(metric_gray, cv2.CV_64F).var())
+    contrast = float(metric_gray.std())
+    brightness = float(metric_gray.mean())
+    edges = cv2.Canny(metric_gray, 80, 160)
     edge_density = float(np.count_nonzero(edges) / edges.size)
-    underexposed = float(np.mean(gray < 20))
-    overexposed = float(np.mean(gray > 252))
+    underexposed = float(np.mean(metric_gray < 20))
+    overexposed = float(np.mean(metric_gray > 252))
     exposure_balance = max(0.0, 1.0 - underexposed * 2.0 - max(0.0, overexposed - 0.55) * 1.25)
     paper_tone = _target_score(brightness, target=222.0, tolerance=95.0)
 

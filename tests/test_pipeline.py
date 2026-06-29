@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from clearscan_cv.geometry import detect_bright_document_region, detect_connected_document_region, detect_document_corners, detect_hough_document_region  # noqa: E402
-from clearscan_cv.pipeline import deskew_by_text_lines, enhance_image, estimate_textline_skew, process_file  # noqa: E402
+from clearscan_cv.pipeline import MAX_PROCESS_IMAGE_EDGE, MAX_PROCESS_IMAGE_PIXELS, deskew_by_text_lines, enhance_image, estimate_textline_skew, limit_image_resolution, process_file  # noqa: E402
 
 
 def make_synthetic_document() -> np.ndarray:
@@ -120,6 +120,22 @@ def make_degraded_low_contrast_page() -> np.ndarray:
     return np.clip(image.astype(np.int16) + noise, 0, 255).astype(np.uint8)
 
 
+def make_heavy_shadow_page() -> np.ndarray:
+    height, width = 700, 900
+    x_gradient = np.linspace(0, 18, width, dtype=np.float32)
+    paper = 232 - x_gradient
+    shadow = np.zeros((height, width), dtype=np.float32)
+    cv2.ellipse(shadow, (650, 380), (320, 270), -18, 0, 360, 82, -1, cv2.LINE_AA)
+    cv2.rectangle(shadow, (0, 0), (260, height), 28, -1)
+    gray = np.clip(paper - shadow, 0, 255).astype(np.uint8)
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    for index in range(10):
+        y = 120 + index * 42
+        cv2.putText(image, f"SHADOW TEXT {index + 1}", (110, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (48, 48, 48), 2, cv2.LINE_AA)
+        cv2.line(image, (110, y + 15), (720, y + 16), (72, 72, 72), 2, cv2.LINE_AA)
+    return image
+
+
 def make_soft_antialiased_text_page() -> np.ndarray:
     image = np.full((520, 760, 3), 246, dtype=np.uint8)
     for index in range(9):
@@ -181,6 +197,13 @@ class PipelineTest(unittest.TestCase):
         self.assertGreater(result.image.shape[0], 100)
         self.assertGreater(result.image.shape[1], 100)
 
+    def test_limits_large_python_inputs_like_web_pipeline(self) -> None:
+        large = np.zeros((4200, 3100, 3), dtype=np.uint8)
+        limited = limit_image_resolution(large)
+
+        self.assertLessEqual(max(limited.shape[:2]), MAX_PROCESS_IMAGE_EDGE)
+        self.assertLessEqual(limited.shape[0] * limited.shape[1], MAX_PROCESS_IMAGE_PIXELS)
+
     def test_estimates_textline_skew(self) -> None:
         page = make_skewed_text_page(3.0)
         angle, confidence = estimate_textline_skew(page)
@@ -212,6 +235,21 @@ class PipelineTest(unittest.TestCase):
         self.assertGreater(float(np.mean(text_region < 128)), 0.008)
         self.assertGreater(float(np.mean(blank_region > 245)), 0.96)
         self.assertLess(float(np.mean(binary < 128)), 0.07)
+
+    def test_frequency_deshadow_reduces_heavy_shadow_without_flattening_text(self) -> None:
+        page = make_heavy_shadow_page()
+        raw = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
+        corrected = enhance_image(page, mode="gray", auto_warp=False).image
+        lit_region = (slice(70, 220), slice(310, 470))
+        shadow_region = (slice(420, 620), slice(650, 835))
+        text_region = corrected[90:550, 90:760]
+
+        before_delta = abs(float(np.mean(raw[lit_region])) - float(np.mean(raw[shadow_region])))
+        after_delta = abs(float(np.mean(corrected[lit_region])) - float(np.mean(corrected[shadow_region])))
+
+        self.assertGreater(before_delta, 50)
+        self.assertLess(after_delta, 18)
+        self.assertGreater(float(np.std(text_region)), 35)
 
     def test_binary_enhancement_keeps_antialias_text_from_becoming_bold(self) -> None:
         result = enhance_image(make_soft_antialiased_text_page(), mode="binary", auto_warp=False)
@@ -309,6 +347,7 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("strokeContrast", html)
         self.assertIn("sauvolaThresholdValue", html)
         self.assertIn("useGatosSauvola", html)
+        self.assertIn("useFrequencyDeshadow", html)
         self.assertIn("rawHistogram", html)
         self.assertIn("normalizedSquaredIntegral", html)
         self.assertIn("textEdge = inkLum[pixel] > 92", html)

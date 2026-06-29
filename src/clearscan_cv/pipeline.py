@@ -12,6 +12,8 @@ from .geometry import detect_document_corners, ensure_bgr, four_point_transform
 from .quality import assess_quality, compare_quality
 
 OutputMode = Literal["color", "gray", "binary"]
+MAX_PROCESS_IMAGE_EDGE = 3200
+MAX_PROCESS_IMAGE_PIXELS = 6_500_000
 
 
 @dataclass
@@ -30,10 +32,67 @@ def unsharp_mask(gray: np.ndarray, amount: float = 0.75, radius: float = 2.0) ->
     return cv2.addWeighted(gray, 1.0 + amount, blur, -amount, 0)
 
 
-def estimate_luminance_background(gray: np.ndarray) -> np.ndarray:
+def limit_image_resolution(image: np.ndarray, max_edge: int = MAX_PROCESS_IMAGE_EDGE, max_pixels: int = MAX_PROCESS_IMAGE_PIXELS) -> np.ndarray:
+    h, w = image.shape[:2]
+    edge_scale = max_edge / float(max(h, w))
+    pixel_scale = np.sqrt(max_pixels / float(max(1, h * w)))
+    scale = min(1.0, edge_scale, float(pixel_scale))
+    if scale >= 0.995:
+        return image
+    return cv2.resize(image, (max(1, int(round(w * scale))), max(1, int(round(h * scale)))), interpolation=cv2.INTER_AREA)
+
+
+def _resize_for_background(gray: np.ndarray, max_dim: int = 1200) -> tuple[np.ndarray, float]:
     h, w = gray.shape[:2]
+    scale = min(1.0, max_dim / float(max(h, w)))
+    if scale >= 1.0:
+        return gray, 1.0
+    resized = cv2.resize(gray, (max(1, int(round(w * scale))), max(1, int(round(h * scale)))), interpolation=cv2.INTER_AREA)
+    return resized, scale
+
+
+def _restore_background_size(background: np.ndarray, shape: tuple[int, int], scale: float) -> np.ndarray:
+    if scale >= 1.0:
+        return background
+    return cv2.resize(background, (shape[1], shape[0]), interpolation=cv2.INTER_CUBIC)
+
+
+def estimate_luminance_background(gray: np.ndarray) -> np.ndarray:
+    small, scale = _resize_for_background(gray)
+    h, w = small.shape[:2]
     kernel = _odd_kernel(int(min(h, w) / 7), minimum=61, maximum=401)
-    return cv2.GaussianBlur(gray, (kernel, kernel), 0)
+    background = cv2.GaussianBlur(small, (kernel, kernel), 0)
+    return _restore_background_size(background, gray.shape[:2], scale)
+
+
+def preserve_high_frequency_detail(source: np.ndarray, corrected: np.ndarray, amount: float = 0.34) -> np.ndarray:
+    detail = source.astype(np.float32) - cv2.GaussianBlur(source, (0, 0), 1.15).astype(np.float32)
+    restored = corrected.astype(np.float32) + np.clip(detail, -80.0, 28.0) * amount
+    return np.clip(restored, 0, 255).astype(np.uint8)
+
+
+def estimate_shadow_illumination(gray: np.ndarray) -> np.ndarray:
+    small, scale = _resize_for_background(gray)
+    h, w = small.shape[:2]
+    close_size = _odd_kernel(int(min(h, w) / 16), minimum=31, maximum=181)
+    blur_size = _odd_kernel(int(min(h, w) / 6), minimum=75, maximum=451)
+    close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_size, close_size))
+    background = cv2.morphologyEx(small, cv2.MORPH_CLOSE, close_kernel, iterations=1)
+    background = cv2.GaussianBlur(background, (blur_size, blur_size), 0)
+    return _restore_background_size(background, gray.shape[:2], scale)
+
+
+def deshadow_luminance(gray: np.ndarray, scale: float = 252.0) -> np.ndarray:
+    background = estimate_shadow_illumination(gray)
+    normalized = cv2.divide(gray, np.maximum(background, 1), scale=scale)
+    normalized = np.clip(normalized, 0, 255).astype(np.uint8)
+    return preserve_high_frequency_detail(gray, normalized, amount=0.28)
+
+
+def should_use_frequency_deshadow(gray: np.ndarray) -> bool:
+    background = estimate_shadow_illumination(gray)
+    background_range = float(np.percentile(background, 95) - np.percentile(background, 5))
+    return background_range > 24.0
 
 
 def normalize_shadow_luminance(gray: np.ndarray, scale: float = 252.0) -> np.ndarray:
@@ -43,16 +102,26 @@ def normalize_shadow_luminance(gray: np.ndarray, scale: float = 252.0) -> np.nda
 
 
 def estimate_gatos_background(gray: np.ndarray, foreground_mask: np.ndarray) -> np.ndarray:
-    mask = foreground_mask.astype(np.uint8) * 255
-    if float(np.mean(mask > 0)) < 0.002:
-        filled = gray
+    small_gray, scale = _resize_for_background(gray)
+    if scale < 1.0:
+        small_mask = cv2.resize(
+            foreground_mask.astype(np.uint8),
+            (small_gray.shape[1], small_gray.shape[0]),
+            interpolation=cv2.INTER_NEAREST,
+        ).astype(bool)
     else:
-        filled = cv2.inpaint(gray, mask, 3, cv2.INPAINT_TELEA)
+        small_mask = foreground_mask
+    mask = small_mask.astype(np.uint8) * 255
+    if float(np.mean(mask > 0)) < 0.002:
+        filled = small_gray
+    else:
+        filled = cv2.inpaint(small_gray, mask, 3, cv2.INPAINT_TELEA)
 
-    h, w = gray.shape[:2]
+    h, w = small_gray.shape[:2]
     kernel = _odd_kernel(int(min(h, w) / 8), minimum=51, maximum=351)
     background = cv2.GaussianBlur(filled, (kernel, kernel), 0)
     background = cv2.morphologyEx(background, cv2.MORPH_CLOSE, np.ones((17, 17), dtype=np.uint8), iterations=1)
+    background = _restore_background_size(background, gray.shape[:2], scale)
     return np.clip(background, 1, 255).astype(np.uint8)
 
 
@@ -65,7 +134,7 @@ def sauvola_threshold(gray_float: np.ndarray, window_size: int, k: float = 0.28,
 
 
 def estimate_textline_skew(image: np.ndarray, max_angle: float = 6.0, step: float = 0.5) -> tuple[float, float]:
-    bgr = ensure_bgr(image)
+    bgr = limit_image_resolution(ensure_bgr(image))
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     height, width = gray.shape[:2]
     if min(height, width) < 80:
@@ -145,7 +214,10 @@ def normalize_illumination(image: np.ndarray) -> np.ndarray:
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
     lightness, channel_a, channel_b = cv2.split(lab)
 
-    normalized = normalize_shadow_luminance(lightness, scale=252)
+    if should_use_frequency_deshadow(lightness):
+        normalized = deshadow_luminance(lightness, scale=252)
+    else:
+        normalized = normalize_shadow_luminance(lightness, scale=252)
     normalized = cv2.medianBlur(normalized, 3)
 
     clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(8, 8))
@@ -180,8 +252,9 @@ def to_clean_binary(image: np.ndarray) -> np.ndarray:
     use_gatos_background = background_range > 26.0 or raw_range > 45.0 or foreground_ratio > 0.14
     if use_gatos_background:
         normalized = cv2.divide(denoised, np.maximum(gatos_background, 1), scale=255)
+        normalized = preserve_high_frequency_detail(denoised, np.clip(normalized, 0, 255).astype(np.uint8), amount=0.22)
     else:
-        normalized = normalize_shadow_luminance(denoised, scale=255)
+        normalized = deshadow_luminance(denoised, scale=255) if should_use_frequency_deshadow(denoised) else normalize_shadow_luminance(denoised, scale=255)
     normalized = np.clip(normalized, 0, 255).astype(np.uint8)
     clahe = cv2.createCLAHE(clipLimit=0.9, tileGridSize=(8, 8))
     gray = unsharp_mask(clahe.apply(normalized), amount=0.18, radius=1.0)
@@ -262,14 +335,14 @@ def enhance_image(image: np.ndarray, mode: OutputMode = "color", auto_warp: bool
     if mode not in {"color", "gray", "binary"}:
         raise ValueError("mode must be one of: color, gray, binary")
 
-    bgr = ensure_bgr(image)
+    bgr = limit_image_resolution(ensure_bgr(image))
     detection = detect_document_corners(bgr)
     warped = four_point_transform(bgr, detection.corners) if auto_warp and detection.found else bgr.copy()
     deskewed, deskew_report = deskew_by_text_lines(warped)
     enhanced = normalize_illumination(deskewed)
 
     if mode == "binary":
-        output = to_clean_binary(enhanced)
+        output = to_clean_binary(deskewed)
     elif mode == "gray":
         output = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
     else:
