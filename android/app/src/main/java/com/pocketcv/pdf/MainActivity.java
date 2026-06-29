@@ -47,6 +47,7 @@ public class MainActivity extends Activity {
     private TextView statusText;
     private TextView reportText;
     private ImageView previewImage;
+    private Button healthButton;
     private Button processButton;
     private Button saveImageButton;
     private Button savePdfButton;
@@ -78,7 +79,7 @@ public class MainActivity extends Activity {
         root.addView(title);
 
         TextView intro = new TextView(this);
-        intro.setText("Android 端选择图片，发送到你本机或局域网 FastAPI 后端，由 Python/OpenCV 生成扫描件。模拟器默认使用 10.0.2.2。");
+        intro.setText("Android で画像を選択し、PC または LAN 内の FastAPI 後端へ送信します。Python/OpenCV がスキャン画像を生成します。エミュレーターでは 10.0.2.2 を使用します。");
         intro.setPadding(0, 8, 0, 20);
         root.addView(intro);
 
@@ -88,6 +89,11 @@ public class MainActivity extends Activity {
         endpointInput.setText("http://10.0.2.2:8765");
         endpointInput.setHint("Backend URL");
         root.addView(endpointInput, matchWidth());
+
+        healthButton = new Button(this);
+        healthButton.setText("API確認");
+        healthButton.setOnClickListener(v -> checkBackend());
+        root.addView(healthButton, matchWidth());
 
         modeSpinner = new Spinner(this);
         ArrayAdapter<String> modes = new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, new String[]{
@@ -122,7 +128,7 @@ public class MainActivity extends Activity {
         root.addView(pickButton, matchWidth());
 
         processButton = new Button(this);
-        processButton.setText("本地后端でスキャン生成");
+        processButton.setText("ローカル後端でスキャン生成");
         processButton.setEnabled(false);
         processButton.setOnClickListener(v -> processImage());
         root.addView(processButton, matchWidth());
@@ -209,7 +215,7 @@ public class MainActivity extends Activity {
             return;
         }
         processButton.setEnabled(false);
-        setStatus("本地 Python/OpenCV 后端处理中...");
+        setStatus("ローカル Python/OpenCV 後端で処理中...");
         reportText.setText("");
         latestImageBytes = null;
         latestPdfBytes = null;
@@ -252,12 +258,43 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    private void checkBackend() {
+        healthButton.setEnabled(false);
+        setStatus("API確認中...");
+        new Thread(() -> {
+            try {
+                URL url = new URL(normalizedEndpoint() + "/api/health");
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setConnectTimeout(8000);
+                connection.setReadTimeout(12000);
+                connection.setRequestMethod("GET");
+                int code = connection.getResponseCode();
+                byte[] responseBytes;
+                try (InputStream in = code >= 200 && code < 300 ? connection.getInputStream() : connection.getErrorStream()) {
+                    responseBytes = readAllBytes(in);
+                }
+                String response = new String(responseBytes, StandardCharsets.UTF_8);
+                if (code < 200 || code >= 300) {
+                    throw new IllegalStateException(response);
+                }
+                JSONObject payload = new JSONObject(response);
+                String engine = payload.optString("recommended_ocr_engine", "未導入");
+                runOnUiThread(() -> {
+                    reportText.setText(payload.toString());
+                    setStatus("API OK · OCR " + engine);
+                    healthButton.setEnabled(true);
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    setStatus("API確認失敗: " + error.getMessage());
+                    healthButton.setEnabled(true);
+                });
+            }
+        }).start();
+    }
+
     private JSONObject postProcess(byte[] imageBytes) throws Exception {
-        String endpoint = endpointInput.getText().toString().trim();
-        if (endpoint.endsWith("/")) {
-            endpoint = endpoint.substring(0, endpoint.length() - 1);
-        }
-        URL url = new URL(endpoint + "/api/process");
+        URL url = new URL(normalizedEndpoint() + "/api/process");
         String boundary = "PocketCV" + System.currentTimeMillis();
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
         connection.setConnectTimeout(15000);
@@ -289,6 +326,14 @@ public class MainActivity extends Activity {
             throw new IllegalStateException(response);
         }
         return new JSONObject(response);
+    }
+
+    private String normalizedEndpoint() {
+        String endpoint = endpointInput.getText().toString().trim();
+        while (endpoint.endsWith("/")) {
+            endpoint = endpoint.substring(0, endpoint.length() - 1);
+        }
+        return endpoint;
     }
 
     private String selectedMode() {

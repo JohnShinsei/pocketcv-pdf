@@ -66,7 +66,17 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("PocketCV PDF Local", response.text)
         self.assertIn("/api/process", response.text)
+        self.assertIn("/api/health", response.text)
         self.assertIn("Python/OpenCV", response.text)
+
+    def test_health_endpoint_reports_local_backend(self) -> None:
+        response = self.client.get("/api/health")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["local_processing"])
+        self.assertIn("usable_ocr_engines", payload)
 
     def test_process_endpoint_returns_scan_pdf_and_manual_corner_report(self) -> None:
         response = self.client.post(

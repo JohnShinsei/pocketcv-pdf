@@ -93,6 +93,19 @@ def ocr_status(language: str = "jpn+eng") -> dict[str, object]:
     return ocr_engine_status(language=language)
 
 
+@app.get("/api/health")
+def health(language: str = "jpn+eng") -> dict[str, object]:
+    ocr = ocr_engine_status(language=language)
+    return {
+        "status": "ok",
+        "app": "PocketCV PDF",
+        "version": app.version,
+        "local_processing": True,
+        "recommended_ocr_engine": ocr["recommended_engine"],
+        "usable_ocr_engines": ocr["usable_engines"],
+    }
+
+
 @app.post("/api/process")
 async def process_upload(
     file: UploadFile = File(...),

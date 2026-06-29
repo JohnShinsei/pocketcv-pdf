@@ -100,7 +100,13 @@ Android アプリ側の Backend URL:
 - Android Emulator: `http://10.0.2.2:8765`
 - 実機: `http://<PCのLAN IP>:8765` 例 `http://192.168.1.20:8765`
 
-Android APK は GitHub Actions の `Android APK` workflow で `pocketcv-android-debug-apk` artifact として生成します。アプリは WebView ではなく原生 Android クライアントで、選択した画像をローカル FastAPI 後端に送り、返ってきた PNG / PDF / DOCX を保存できます。
+Android APK は GitHub Actions の `Android APK` workflow で `pocketcv-android-debug-apk` artifact として生成します。アプリは WebView ではなく原生 Android クライアントで、選択した画像をローカル FastAPI 後端に送り、返ってきた PNG / PDF / DOCX を保存できます。アプリ起動後は先に `API確認` を押し、後端に接続できることを確認してから画像を選択します。
+
+Android SDK / adb がある環境では、debug APK をインストールして起動できます。
+
+```powershell
+.\scripts\install_android_debug.ps1 -ApkPath android\app\build\outputs\apk\debug\app-debug.apk
+```
 
 Windows のローカル後端 EXE を作る場合:
 

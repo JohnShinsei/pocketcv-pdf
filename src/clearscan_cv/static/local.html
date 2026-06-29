@@ -304,12 +304,12 @@
 
       async function checkApi() {
         try {
-          const response = await fetch("/api/ocr/status");
+          const response = await fetch("/api/health");
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
           }
           const payload = await response.json();
-          setStatus(`API OK · OCR ${payload.recommended_engine || "未導入"}`);
+          setStatus(`API OK · OCR ${payload.recommended_ocr_engine || "未導入"}`);
           reportEl.value = JSON.stringify(payload, null, 2);
         } catch (error) {
           setStatus(error.message || "API確認に失敗しました。", true);
