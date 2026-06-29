@@ -2731,6 +2731,10 @@
         return { mean, deviation: Math.sqrt(variance) };
       }
 
+      function sauvolaThresholdValue(mean, deviation, k = 0.28, dynamicRange = 128) {
+        return mean * (1 + k * (deviation / dynamicRange - 1));
+      }
+
       function cleanupBinaryImageData(data, width, height) {
         const pixelCount = width * height;
         const visited = new Uint8Array(pixelCount);
@@ -2856,6 +2860,12 @@
           tileBackgrounds[index] = Math.max(128, localPercentileFromHistogram(tileHistograms[index], tileCounts[index], 0.82));
         }
         const smoothedBackgrounds = smoothTileValues(tileBackgrounds, gridWidth, gridHeight);
+        const sortedBackgrounds = Array.from(smoothedBackgrounds).sort((a, b) => a - b);
+        const backgroundRange =
+          sortedBackgrounds[Math.min(sortedBackgrounds.length - 1, Math.floor(sortedBackgrounds.length * 0.95))] -
+          sortedBackgrounds[Math.min(sortedBackgrounds.length - 1, Math.floor(sortedBackgrounds.length * 0.05))];
+        const rawRange = percentileFromHistogram(histogram, samples, 0.95) - percentileFromHistogram(histogram, samples, 0.2);
+        const useGatosSauvola = renderMode === "binary" && (backgroundRange > 26 || rawRange > 45);
 
         for (let y = 0; y < sourceCanvas.height; y += 1) {
           for (let x = 0; x < sourceCanvas.width; x += 1) {
@@ -2901,6 +2911,15 @@
 
         const adaptiveRadius = Math.max(16, Math.round(Math.max(sourceCanvas.width, sourceCanvas.height) / 42));
         const normalizedIntegral = buildIntegralImage(normalizedLum, sourceCanvas.width, sourceCanvas.height);
+        const normalizedSquaredLum = renderMode === "binary" && useGatosSauvola ? new Float32Array(pixelCount) : null;
+        if (normalizedSquaredLum) {
+          for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+            normalizedSquaredLum[pixel] = normalizedLum[pixel] * normalizedLum[pixel];
+          }
+        }
+        const normalizedSquaredIntegral = normalizedSquaredLum ? buildIntegralImage(normalizedSquaredLum, sourceCanvas.width, sourceCanvas.height) : null;
+        const sauvolaSmallRadius = Math.max(15, Math.round(Math.max(sourceCanvas.width, sourceCanvas.height) / 68));
+        const sauvolaLargeRadius = Math.max(35, Math.round(Math.max(sourceCanvas.width, sourceCanvas.height) / 28));
         const autoConfidence = Number.isFinite(detection.autoConfidence) ? detection.autoConfidence : detection.confidence;
         const autoFound = Object.prototype.hasOwnProperty.call(detection, "autoFound") ? detection.autoFound : detection.found;
         const formBinaryMode = renderMode === "binary" && (!autoFound || autoConfidence < 0.2);
@@ -2976,12 +2995,42 @@
               );
               const strokeContrast = localMean - sharpened;
               const paperNoiseGuard = sharpened > 176 && inkLum[pixel] < 84 && normalizedGradient < 42 && strokeContrast < 42;
+              let sauvolaFine = false;
+              let sauvolaBroad = false;
+              if (useGatosSauvola && normalizedSquaredIntegral) {
+                const smallStats = localStatsFromIntegrals(
+                  normalizedIntegral,
+                  normalizedSquaredIntegral,
+                  sourceCanvas.width,
+                  sourceCanvas.height,
+                  x,
+                  y,
+                  sauvolaSmallRadius
+                );
+                const largeStats = localStatsFromIntegrals(
+                  normalizedIntegral,
+                  normalizedSquaredIntegral,
+                  sourceCanvas.width,
+                  sourceCanvas.height,
+                  x,
+                  y,
+                  sauvolaLargeRadius
+                );
+                sauvolaFine =
+                  sharpened < sauvolaThresholdValue(smallStats.mean, smallStats.deviation, 0.18) - 7 &&
+                  strokeContrast > 13 &&
+                  (normalizedGradient > 18 || sharpened < 156);
+                sauvolaBroad =
+                  sharpened < sauvolaThresholdValue(largeStats.mean, largeStats.deviation, 0.28) - 12 &&
+                  strokeContrast > 20 &&
+                  sharpened < 184;
+              }
               const localInk =
                 !paperNoiseGuard && strokeContrast > 31 && inkLum[pixel] > 48 && sharpened < 194 && normalizedGradient > 15;
               const textBody = inkLum[pixel] > 162 && strokeContrast > 34 && sharpened < 134;
               const textEdge = inkLum[pixel] > 92 && normalizedGradient > 64 && strokeContrast > 18 && sharpened < 178;
               const deepInk = normCenter < 48 && inkLum[pixel] > 120 && normalizedGradient > 20;
-              const value = localInk || textBody || textEdge || deepInk ? 0 : 255;
+              const value = sauvolaFine || sauvolaBroad || localInk || textBody || textEdge || deepInk ? 0 : 255;
               data[index] = value;
               data[index + 1] = value;
               data[index + 2] = value;
@@ -3031,6 +3080,8 @@
             threshold,
             deskewAngle: detection.deskewAngle || 0,
             deskewConfidence: detection.deskewConfidence || 0,
+            backgroundRange,
+            useGatosSauvola,
           },
         };
       }

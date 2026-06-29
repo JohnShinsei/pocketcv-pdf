@@ -42,6 +42,28 @@ def normalize_shadow_luminance(gray: np.ndarray, scale: float = 252.0) -> np.nda
     return np.clip(normalized, 0, 255).astype(np.uint8)
 
 
+def estimate_gatos_background(gray: np.ndarray, foreground_mask: np.ndarray) -> np.ndarray:
+    mask = foreground_mask.astype(np.uint8) * 255
+    if float(np.mean(mask > 0)) < 0.002:
+        filled = gray
+    else:
+        filled = cv2.inpaint(gray, mask, 3, cv2.INPAINT_TELEA)
+
+    h, w = gray.shape[:2]
+    kernel = _odd_kernel(int(min(h, w) / 8), minimum=51, maximum=351)
+    background = cv2.GaussianBlur(filled, (kernel, kernel), 0)
+    background = cv2.morphologyEx(background, cv2.MORPH_CLOSE, np.ones((17, 17), dtype=np.uint8), iterations=1)
+    return np.clip(background, 1, 255).astype(np.uint8)
+
+
+def sauvola_threshold(gray_float: np.ndarray, window_size: int, k: float = 0.28, r: float = 128.0) -> np.ndarray:
+    window_size = _odd_kernel(window_size, minimum=15, maximum=251)
+    mean = cv2.boxFilter(gray_float, cv2.CV_32F, (window_size, window_size), normalize=True)
+    sq_mean = cv2.boxFilter(gray_float * gray_float, cv2.CV_32F, (window_size, window_size), normalize=True)
+    deviation = np.sqrt(np.maximum(0.0, sq_mean - mean * mean))
+    return mean * (1.0 + k * (deviation / r - 1.0))
+
+
 def estimate_textline_skew(image: np.ndarray, max_angle: float = 6.0, step: float = 0.5) -> tuple[float, float]:
     bgr = ensure_bgr(image)
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
@@ -141,7 +163,26 @@ def normalize_illumination(image: np.ndarray) -> np.ndarray:
 def to_clean_binary(image: np.ndarray) -> np.ndarray:
     bgr = ensure_bgr(image)
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    normalized = normalize_shadow_luminance(gray, scale=255)
+    denoised = cv2.bilateralFilter(gray, 5, 24, 24)
+    rough_block_size = _odd_kernel(int(min(gray.shape[:2]) / 18), minimum=41, maximum=161)
+    rough_float = denoised.astype(np.float32)
+    rough_mean = cv2.boxFilter(rough_float, cv2.CV_32F, (rough_block_size, rough_block_size), normalize=True)
+    rough_sq_mean = cv2.boxFilter(rough_float * rough_float, cv2.CV_32F, (rough_block_size, rough_block_size), normalize=True)
+    rough_std = np.sqrt(np.maximum(0.0, rough_sq_mean - rough_mean * rough_mean))
+    otsu_seed_threshold, _ = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    rough_foreground = ((rough_mean - rough_float) > np.maximum(10.0, rough_std * 0.35 + 4.0)) | (
+        rough_float < min(float(otsu_seed_threshold) - 8.0, 158.0)
+    )
+    gatos_background = estimate_gatos_background(denoised, rough_foreground)
+    raw_range = float(np.percentile(denoised, 95) - np.percentile(denoised, 20))
+    background_range = float(np.percentile(gatos_background, 95) - np.percentile(gatos_background, 5))
+    foreground_ratio = float(np.mean(rough_foreground))
+    use_gatos_background = background_range > 26.0 or raw_range > 45.0 or foreground_ratio > 0.14
+    if use_gatos_background:
+        normalized = cv2.divide(denoised, np.maximum(gatos_background, 1), scale=255)
+    else:
+        normalized = normalize_shadow_luminance(denoised, scale=255)
+    normalized = np.clip(normalized, 0, 255).astype(np.uint8)
     clahe = cv2.createCLAHE(clipLimit=0.9, tileGridSize=(8, 8))
     gray = unsharp_mask(clahe.apply(normalized), amount=0.18, radius=1.0)
 
@@ -157,12 +198,22 @@ def to_clean_binary(image: np.ndarray) -> np.ndarray:
     otsu_threshold, _ = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     ink_delta = local_mean - gray_float
 
+    if use_gatos_background:
+        small_window = _odd_kernel(int(min(h, w) / 34), minimum=31, maximum=91)
+        large_window = _odd_kernel(int(min(h, w) / 14), minimum=71, maximum=211)
+        small_sauvola = sauvola_threshold(gray_float, small_window, k=0.18)
+        large_sauvola = sauvola_threshold(gray_float, large_window, k=0.28)
+        sauvola_fine = (gray_float < small_sauvola - 7.0) & (ink_delta > 13.0) & ((gradient > 18.0) | (gray_float < 156.0))
+        sauvola_broad = (gray_float < large_sauvola - 12.0) & (ink_delta > 20.0) & (gray_float < 184.0)
+    else:
+        sauvola_fine = np.zeros_like(gray_float, dtype=bool)
+        sauvola_broad = np.zeros_like(gray_float, dtype=bool)
     local_ink = (ink_delta > np.maximum(24.0, local_std * 0.58 + 10.0)) & (gray_float < 198) & (gradient > 15)
     text_body = (gray_float < min(float(otsu_threshold) - 12.0, 144.0)) & (ink_delta > 15)
     text_edge = (ink_delta > 18) & (gradient > 54) & (gray_float < 178)
     deep_ink = gray_float < 62
-    paper_texture = (gray_float > 178) & (ink_delta < 40) & (gradient < 42)
-    foreground_mask = (local_ink | text_body | text_edge | deep_ink) & ~paper_texture
+    paper_texture = (gray_float > 178) & (ink_delta < 42) & (gradient < 42)
+    foreground_mask = (sauvola_fine | sauvola_broad | local_ink | text_body | text_edge | deep_ink) & ~paper_texture
     binary = np.where(foreground_mask, 0, 255).astype(np.uint8)
 
     foreground = 255 - binary

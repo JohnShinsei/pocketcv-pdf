@@ -102,6 +102,24 @@ def make_shadowed_noisy_page() -> np.ndarray:
     return image
 
 
+def make_degraded_low_contrast_page() -> np.ndarray:
+    rng = np.random.default_rng(19)
+    height, width = 640, 860
+    x_gradient = np.linspace(0, 52, width, dtype=np.float32)
+    paper = 211 - x_gradient
+    shadow = np.zeros((height, width), dtype=np.float32)
+    cv2.ellipse(shadow, (width - 160, height // 2), (250, 280), 0, 0, 360, 42, -1, cv2.LINE_AA)
+    gray = np.clip(paper - cv2.GaussianBlur(shadow, (181, 181), 0), 0, 255).astype(np.uint8)
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    for index in range(11):
+        y = 105 + index * 38
+        tone = 98 + (index % 3) * 11
+        cv2.putText(image, f"LOW CONTRAST {index + 1}", (90, y), cv2.FONT_HERSHEY_SIMPLEX, 0.64, (tone, tone, tone), 1, cv2.LINE_AA)
+        cv2.line(image, (90, y + 13), (690, y + 14), (tone + 18, tone + 18, tone + 18), 1, cv2.LINE_AA)
+    noise = rng.normal(0, 3.5, size=image.shape).astype(np.int16)
+    return np.clip(image.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+
+
 def make_soft_antialiased_text_page() -> np.ndarray:
     image = np.full((520, 760, 3), 246, dtype=np.uint8)
     for index in range(9):
@@ -184,6 +202,16 @@ class PipelineTest(unittest.TestCase):
         self.assertGreater(float(np.mean(text_region < 128)), 0.012)
         self.assertLess(float(np.mean(binary < 128)), 0.075)
         self.assertIn("textline_deskew", result.report["pipeline"])
+
+    def test_gatos_sauvola_enhancement_keeps_low_contrast_text(self) -> None:
+        result = enhance_image(make_degraded_low_contrast_page(), mode="binary", auto_warp=False)
+        binary = result.image
+        text_region = binary[80:535, 70:735]
+        blank_region = binary[520:625, 95:760]
+
+        self.assertGreater(float(np.mean(text_region < 128)), 0.008)
+        self.assertGreater(float(np.mean(blank_region > 245)), 0.96)
+        self.assertLess(float(np.mean(binary < 128)), 0.07)
 
     def test_binary_enhancement_keeps_antialias_text_from_becoming_bold(self) -> None:
         result = enhance_image(make_soft_antialiased_text_page(), mode="binary", auto_warp=False)
@@ -279,6 +307,9 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("autoFound", html)
         self.assertIn("paperNoiseGuard", html)
         self.assertIn("strokeContrast", html)
+        self.assertIn("sauvolaThresholdValue", html)
+        self.assertIn("useGatosSauvola", html)
+        self.assertIn("normalizedSquaredIntegral", html)
         self.assertIn("textEdge = inkLum[pixel] > 92", html)
         self.assertIn("strokeContrast > 31", html)
         self.assertIn("workspaceEl.classList.toggle(\"has-ocr\"", html)
@@ -318,7 +349,7 @@ class PipelineTest(unittest.TestCase):
         worker = (ROOT / "src" / "clearscan_cv" / "static" / "sw.js").read_text(encoding="utf-8")
 
         self.assertIn("CACHE_NAME", worker)
-        self.assertIn("pocketcv-pdf-v8", worker)
+        self.assertIn("pocketcv-pdf-v9", worker)
         self.assertIn("install", worker)
         self.assertIn("fetch", worker)
         self.assertIn("event.request.mode === \"navigate\"", worker)
