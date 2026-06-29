@@ -875,6 +875,7 @@
         ocrText: "",
         ocrPages: [],
         ocrConfidence: null,
+        ocrGeometry: null,
         ocrBusy: false,
         layoutText: "",
         layoutBusy: false,
@@ -998,6 +999,7 @@
         state.ocrText = "";
         state.ocrPages = [];
         state.ocrConfidence = null;
+        state.ocrGeometry = null;
         state.layoutText = "";
         ocrOutputEl.value = "";
         layoutOutputEl.value = "";
@@ -1542,6 +1544,86 @@
           });
       }
 
+      function ocrWordCenterAngle(words) {
+        const centers = (words || [])
+          .map((word) => {
+            if (!word || !word.bbox) {
+              return null;
+            }
+            const box = word.bbox;
+            const width = box.x1 - box.x0;
+            const height = box.y1 - box.y0;
+            if (width <= 0 || height <= 0) {
+              return null;
+            }
+            return {
+              x: (box.x0 + box.x1) / 2,
+              y: (box.y0 + box.y1) / 2,
+              height,
+            };
+          })
+          .filter(Boolean);
+        if (centers.length < 2) {
+          return null;
+        }
+
+        const xValues = centers.map((point) => point.x);
+        const xSpan = Math.max(...xValues) - Math.min(...xValues);
+        const medianHeight = Math.max(1, median(centers.map((point) => point.height)));
+        if (xSpan < Math.max(20, medianHeight * 2)) {
+          return null;
+        }
+
+        const meanX = centers.reduce((sum, point) => sum + point.x, 0) / centers.length;
+        const meanY = centers.reduce((sum, point) => sum + point.y, 0) / centers.length;
+        let numerator = 0;
+        let denominator = 0;
+        centers.forEach((point) => {
+          const dx = point.x - meanX;
+          numerator += dx * (point.y - meanY);
+          denominator += dx * dx;
+        });
+        if (denominator <= 0) {
+          return null;
+        }
+
+        const angle = Math.abs((Math.atan(numerator / denominator) * 180) / Math.PI);
+        return angle > 35 ? null : angle;
+      }
+
+      function evaluateOcrTextlineGeometry(ocrPages) {
+        const angles = [];
+        (ocrPages || []).forEach((page) => {
+          (page.lines || []).forEach((line) => {
+            const angle = ocrWordCenterAngle(line.words || []);
+            if (Number.isFinite(angle)) {
+              angles.push(angle);
+            }
+          });
+        });
+
+        if (!angles.length) {
+          return {
+            sampleCount: 0,
+            meanAbsAngle: null,
+            maxAbsAngle: null,
+            horizontalScore: null,
+            label: "文字行評価なし",
+          };
+        }
+
+        const meanAngle = angles.reduce((sum, value) => sum + value, 0) / angles.length;
+        const maxAngle = Math.max(...angles);
+        const horizontalScore = clamp(1 - Math.min(meanAngle, 8) / 8, 0, 1);
+        return {
+          sampleCount: angles.length,
+          meanAbsAngle: Math.round(meanAngle * 1000) / 1000,
+          maxAbsAngle: Math.round(maxAngle * 1000) / 1000,
+          horizontalScore: Math.round(horizontalScore * 10000) / 10000,
+          label: horizontalScore < 0.62 ? "文字行傾き確認" : "文字行OK",
+        };
+      }
+
       function extractOcrPage(result, page, pageIndex, ocrCanvas) {
         const data = result && result.data ? result.data : {};
         return {
@@ -1747,6 +1829,7 @@
         state.ocrText = "";
         state.ocrPages = [];
         state.ocrConfidence = null;
+        state.ocrGeometry = null;
         state.layoutText = "";
         ocrOutputEl.value = "";
         layoutOutputEl.value = "";
@@ -1778,18 +1861,24 @@
           const joined = chunks.join("\n\n").trim();
           state.ocrText = joined;
           state.ocrPages = ocrPages;
+          state.ocrGeometry = evaluateOcrTextlineGeometry(ocrPages);
           revokePdfUrl();
           if (confidences.length) {
             state.ocrConfidence = confidences.reduce((sum, value) => sum + value, 0) / confidences.length;
           }
           ocrOutputEl.value = joined || "文字を検出できませんでした。";
+          const geometryText =
+            state.ocrGeometry && state.ocrGeometry.horizontalScore !== null
+              ? ` · ${state.ocrGeometry.label} ${Math.round(state.ocrGeometry.horizontalScore * 100)}/100`
+              : "";
           setOcrStatus(
-            state.ocrConfidence === null ? "OCR完了" : `OCR完了 · 信頼度 ${Math.round(state.ocrConfidence)}`
+            state.ocrConfidence === null ? `OCR完了${geometryText}` : `OCR完了 · 信頼度 ${Math.round(state.ocrConfidence)}${geometryText}`
           );
         } catch (error) {
           state.ocrText = "";
           state.ocrPages = [];
           state.ocrConfidence = null;
+          state.ocrGeometry = null;
           state.layoutText = "";
           ocrOutputEl.value = "";
           layoutOutputEl.value = "";
