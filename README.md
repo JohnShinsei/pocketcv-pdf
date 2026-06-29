@@ -153,6 +153,18 @@ Python 版の OCR エンジンは任意依存です。軽量に試す場合は `
 
 ローカル API の `/api/process` でも、同じ形式の `corners` フォーム値を送ると手動四隅で処理できます。`corners_space` は `input` または `processed` を指定できます。
 
+例:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/process ^
+  -F "file=@photo.jpg" ^
+  -F "mode=binary" ^
+  -F "corners=223,414 1864,279 2207,2685 0,2943" ^
+  -F "corners_space=processed" ^
+  -F "pdf=true" ^
+  -F "readability=true"
+```
+
 ## 技術構成
 
 ```text
@@ -171,8 +183,12 @@ src/clearscan_cv/
     index.html    スマートフォン向けオンデバイス画像処理アプリ
     sw.js         PWA 用 Service Worker
 tests/
-  test_pipeline.py
+  test_api.py
   test_demo_pipeline.py
+  test_evaluation.py
+  test_export.py
+  test_ocr.py
+  test_pipeline.py
 scripts/
   generate_sample.py
   run_demo_pipeline.py
