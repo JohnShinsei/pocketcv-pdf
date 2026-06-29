@@ -379,6 +379,47 @@ def template_guided_illumination(image: np.ndarray, template: np.ndarray | None)
     return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR), report
 
 
+def _fragile_component_mask(foreground: np.ndarray) -> np.ndarray:
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, 8)
+    preserved = np.zeros_like(foreground)
+    small_area_limit = max(18, int(round(foreground.size * 0.000045)))
+    for label in range(1, count):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        width = int(stats[label, cv2.CC_STAT_WIDTH])
+        height = int(stats[label, cv2.CC_STAT_HEIGHT])
+        if area <= small_area_limit or min(width, height) <= 2 or (area <= small_area_limit * 2 and max(width, height) <= 14):
+            preserved[labels == label] = 255
+    return preserved
+
+
+def _reduce_bold_binary_strokes(binary: np.ndarray) -> np.ndarray:
+    normalized = np.where(binary < 128, 0, 255).astype(np.uint8)
+    quality_before = assess_quality(normalized)
+    ink_density = float(quality_before["ink_density"])
+    boldness_risk = float(quality_before["boldness_risk"])
+    if ink_density < 0.105 and boldness_risk < 0.28:
+        return normalized
+
+    foreground = 255 - normalized
+    thinned = cv2.erode(foreground, np.ones((3, 3), dtype=np.uint8), iterations=1)
+    thinned = cv2.bitwise_or(thinned, _fragile_component_mask(foreground))
+    candidate = 255 - thinned
+
+    quality_after = assess_quality(candidate)
+    candidate_ink = float(quality_after["ink_density"])
+    candidate_edge_density = float(quality_after["edge_density"])
+    original_edge_density = float(quality_before["edge_density"])
+    if candidate_ink < max(0.012, ink_density * 0.42):
+        return normalized
+    if candidate_edge_density < original_edge_density * 0.52:
+        return normalized
+    if candidate_ink >= ink_density * 0.94:
+        return normalized
+    if float(quality_after["boldness_risk"]) <= max(0.2, boldness_risk - 0.08) or candidate_ink < 0.12:
+        return candidate
+    return normalized
+
+
 def to_clean_binary(image: np.ndarray) -> np.ndarray:
     bgr = ensure_bgr(image)
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
@@ -471,7 +512,7 @@ def to_clean_binary(image: np.ndarray) -> np.ndarray:
         is_small_text = area >= 5 and (aspect >= 2.0 or max(width, height) >= 8)
         if not (is_edge_stain or is_near_edge_blob or is_large_blob or is_tiny_dust or is_sparse_texture) and (area >= 14 or is_small_text):
             kept[labels == label] = 255
-    return 255 - kept
+    return _reduce_bold_binary_strokes(255 - kept)
 
 
 def build_side_by_side(original: np.ndarray, processed: np.ndarray) -> np.ndarray:

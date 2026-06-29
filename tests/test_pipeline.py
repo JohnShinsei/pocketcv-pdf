@@ -189,6 +189,16 @@ def make_soft_antialiased_text_page() -> np.ndarray:
     return cv2.GaussianBlur(image, (3, 3), 0)
 
 
+def make_overbold_dense_text_page() -> np.ndarray:
+    image = np.full((900, 760, 3), 255, dtype=np.uint8)
+    for block in range(2):
+        x = 20 + block * 360
+        for index in range(27):
+            y = 32 + index * 32
+            cv2.putText(image, f"DENSE {index + 1:02d}", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.82, (0, 0, 0), 4, cv2.LINE_AA)
+    return cv2.GaussianBlur(image, (3, 3), 0)
+
+
 def make_near_edge_artifact_page() -> np.ndarray:
     image = make_soft_antialiased_text_page()
     cv2.rectangle(image, (8, 20), (280, 34), (0, 0, 0), -1)
@@ -537,6 +547,20 @@ class PipelineTest(unittest.TestCase):
         self.assertGreater(black_ratio, 0.01)
         self.assertLess(black_ratio, 0.055)
         self.assertLess(float(assess_quality(result.image)["boldness_risk"]), 0.2)
+
+    def test_binary_enhancement_reduces_overbold_dense_text(self) -> None:
+        page = make_overbold_dense_text_page()
+        raw_gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
+        raw_quality = assess_quality(page)
+        result = enhance_image(page, mode="binary", auto_warp=False)
+        quality = assess_quality(result.image)
+        black_ratio = float(np.mean(result.image < 128))
+
+        self.assertGreater(float(raw_quality["boldness_risk"]), 0.5)
+        self.assertLess(black_ratio, float(np.mean(raw_gray < 128)) * 0.7)
+        self.assertGreater(black_ratio, 0.04)
+        self.assertLess(float(quality["boldness_risk"]), 0.2)
+        self.assertGreater(float(quality["edge_density"]), 0.03)
 
     def test_binary_enhancement_removes_near_edge_artifacts(self) -> None:
         result = enhance_image(make_near_edge_artifact_page(), mode="binary", auto_warp=False)
