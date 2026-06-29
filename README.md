@@ -269,11 +269,12 @@ clearscan-dataset --annotations annotations.jsonl --image-root . --out datasets/
 ```bash
 pip install -e .[train]
 clearscan-docnet train --dataset datasets/docnet-synth --out models/docnet.pt --epochs 20 --image-size 256
+clearscan-docnet evaluate --checkpoint models/docnet.pt --dataset datasets/docnet-synth --split val --output outputs/docnet_eval.json
 clearscan-docnet predict --checkpoint models/docnet.pt --input photos/page_001.jpg --output outputs/page_001_corners.json
 clearscan photos/page_001.jpg --out outputs/model_scan --mode gray --external-detector-command "clearscan-docnet predict --checkpoint models/docnet.pt --input {input} --output {output}"
 ```
 
-このモデルは最初から画像全体を復元するのではなく、文書領域の mask と四隅を安定して推定する役割に限定しています。透視変換、影除去、文字強調、PDF/OCR 出力は従来の OpenCV パイプラインで行うため、失敗時は自動検出や手動四隅調整に戻せます。
+このモデルは最初から画像全体を復元するのではなく、文書領域の mask と四隅を安定して推定する役割に限定しています。`evaluate` は validation split に対する mask IoU、四隅の平均/95 パーセンタイル誤差、検出成功率を JSON に保存します。透視変換、影除去、文字強調、PDF/OCR 出力は従来の OpenCV パイプラインで行うため、失敗時は自動検出や手動四隅調整に戻せます。
 
 出力:
 

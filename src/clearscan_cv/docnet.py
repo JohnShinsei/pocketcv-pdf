@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import cv2
 import numpy as np
@@ -99,6 +99,49 @@ def mask_to_corners(mask: np.ndarray, threshold: float = 0.5) -> dict[str, Any]:
     }
 
 
+def mask_iou(predicted: np.ndarray, target: np.ndarray, threshold: float = 0.5) -> float:
+    if predicted.ndim == 3:
+        predicted = cv2.cvtColor(predicted, cv2.COLOR_BGR2GRAY)
+    if target.ndim == 3:
+        target = cv2.cvtColor(target, cv2.COLOR_BGR2GRAY)
+    if predicted.shape[:2] != target.shape[:2]:
+        predicted = cv2.resize(predicted, (target.shape[1], target.shape[0]), interpolation=cv2.INTER_LINEAR)
+
+    if predicted.dtype == np.uint8:
+        pred_mask = predicted >= int(round(threshold * 255))
+    else:
+        pred_mask = predicted.astype(np.float32) >= threshold
+    if target.dtype == np.uint8:
+        target_mask = target > 127
+    else:
+        target_mask = target.astype(np.float32) >= threshold
+    intersection = int(np.count_nonzero(pred_mask & target_mask))
+    union = int(np.count_nonzero(pred_mask | target_mask))
+    return float(intersection / max(1, union))
+
+
+def corner_error_pixels(
+    predicted_corners: Sequence[Sequence[float]],
+    target_corners: Sequence[Sequence[float]],
+    width: int,
+    height: int,
+) -> dict[str, float]:
+    predicted = order_points(np.asarray(predicted_corners, dtype=np.float32))
+    target = order_points(np.asarray(target_corners, dtype=np.float32))
+    distances = np.linalg.norm(predicted - target, axis=1)
+    diagonal = max(1.0, float(np.hypot(width, height)))
+    return {
+        "mean_px": round(float(np.mean(distances)), 4),
+        "max_px": round(float(np.max(distances)), 4),
+        "mean_ratio": round(float(np.mean(distances) / diagonal), 6),
+        "max_ratio": round(float(np.max(distances) / diagonal), 6),
+    }
+
+
+def _selected_device(torch: Any, device: str) -> str:
+    return "cuda" if device == "auto" and torch.cuda.is_available() else ("cpu" if device == "auto" else device)
+
+
 def _build_model(base_channels: int = 16) -> Any:
     _, nn, functional, _ = _require_torch()
 
@@ -144,6 +187,29 @@ def _build_model(base_channels: int = 16) -> Any:
 
     torch, _, _, _ = _require_torch()
     return TinyDocNet()
+
+
+def _load_detector(checkpoint_path: Path, device: str = "auto") -> tuple[Any, Any, dict[str, Any], str]:
+    torch, _, _, _ = _require_torch()
+    selected_device = _selected_device(torch, device)
+    checkpoint = torch.load(checkpoint_path, map_location=selected_device)
+    config = checkpoint.get("config", {})
+    base_channels = int(config.get("base_channels", 16))
+    model = _build_model(base_channels=base_channels)
+    model.load_state_dict(checkpoint["model_state"])
+    model.to(selected_device)
+    model.eval()
+    return torch, model, config, selected_device
+
+
+def _predict_mask(model: Any, torch: Any, image: np.ndarray, image_size: int, device: str) -> np.ndarray:
+    height, width = image.shape[:2]
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    resized = cv2.resize(rgb, (image_size, image_size), interpolation=cv2.INTER_AREA)
+    tensor = torch.from_numpy(np.transpose(resized.astype(np.float32) / 255.0, (2, 0, 1))[None, :, :, :]).to(device)
+    with torch.no_grad():
+        mask = torch.sigmoid(model(tensor))[0, 0].detach().cpu().numpy()
+    return cv2.resize(mask, (width, height), interpolation=cv2.INTER_LINEAR)
 
 
 def _dataset_class(image_size: int) -> Any:
@@ -205,7 +271,7 @@ def train_detector(
     device: str = "auto",
 ) -> dict[str, Any]:
     torch, _, _, (DataLoader, _) = _require_torch()
-    selected_device = "cuda" if device == "auto" and torch.cuda.is_available() else ("cpu" if device == "auto" else device)
+    selected_device = _selected_device(torch, device)
     train_manifest = dataset_dir / "train.jsonl"
     if not train_manifest.exists() or not train_manifest.read_text(encoding="utf-8").strip():
         train_manifest = dataset_dir / "manifest.jsonl"
@@ -254,23 +320,10 @@ def train_detector(
 
 
 def predict_detector(checkpoint_path: Path, image_path: Path, threshold: float = 0.5, output_path: Path | None = None) -> dict[str, Any]:
-    torch, _, _, _ = _require_torch()
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    config = checkpoint.get("config", {})
+    torch, model, config, selected_device = _load_detector(checkpoint_path)
     image_size = int(config.get("image_size", 256))
-    base_channels = int(config.get("base_channels", 16))
-    model = _build_model(base_channels=base_channels)
-    model.load_state_dict(checkpoint["model_state"])
-    model.eval()
-
     image = _read_color(image_path)
-    height, width = image.shape[:2]
-    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    resized = cv2.resize(rgb, (image_size, image_size), interpolation=cv2.INTER_AREA)
-    tensor = torch.from_numpy(np.transpose(resized.astype(np.float32) / 255.0, (2, 0, 1))[None, :, :, :])
-    with torch.no_grad():
-        mask = torch.sigmoid(model(tensor))[0, 0].numpy()
-    mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_LINEAR)
+    mask = _predict_mask(model, torch, image, image_size, selected_device)
     detection = mask_to_corners(mask, threshold=threshold)
     payload = {
         "method": "docnet_mask",
@@ -283,6 +336,87 @@ def predict_detector(checkpoint_path: Path, image_path: Path, threshold: float =
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return payload
+
+
+def _records_for_split(dataset_dir: Path, split: str) -> tuple[Path, list[dict[str, Any]]]:
+    manifest_path = dataset_dir / ("manifest.jsonl" if split == "all" else f"{split}.jsonl")
+    if not manifest_path.exists() or not manifest_path.read_text(encoding="utf-8").strip():
+        manifest_path = dataset_dir / "manifest.jsonl"
+    records = _read_jsonl(manifest_path)
+    if split != "all":
+        records = [record for record in records if record.get("split", split) == split]
+    if not records:
+        raise ValueError(f"no samples found for split '{split}' in {dataset_dir}")
+    return manifest_path, records
+
+
+def evaluate_detector(
+    checkpoint_path: Path,
+    dataset_dir: Path,
+    split: str = "val",
+    threshold: float = 0.5,
+    limit: int | None = None,
+    device: str = "auto",
+    output_path: Path | None = None,
+    include_samples: bool = False,
+) -> dict[str, Any]:
+    torch, model, config, selected_device = _load_detector(checkpoint_path, device=device)
+    image_size = int(config.get("image_size", 256))
+    manifest_path, records = _records_for_split(dataset_dir, split)
+    if limit is not None and limit > 0:
+        records = records[:limit]
+
+    ious: list[float] = []
+    mean_corner_errors: list[float] = []
+    max_corner_errors: list[float] = []
+    found_count = 0
+    sample_payloads: list[dict[str, Any]] = []
+
+    for record in records:
+        image = _read_color(dataset_dir / str(record["image"]))
+        target_mask = _read_gray(dataset_dir / str(record["mask"]))
+        height, width = image.shape[:2]
+        predicted_mask = _predict_mask(model, torch, image, image_size, selected_device)
+        iou = mask_iou(predicted_mask, target_mask, threshold=threshold)
+        detection = mask_to_corners(predicted_mask, threshold=threshold)
+        if detection["found"]:
+            found_count += 1
+        corner_metrics = corner_error_pixels(detection["corners"], record["corners"], width=width, height=height)
+        ious.append(iou)
+        mean_corner_errors.append(corner_metrics["mean_px"])
+        max_corner_errors.append(corner_metrics["max_px"])
+        if include_samples:
+            sample_payloads.append(
+                {
+                    "id": record.get("id"),
+                    "mask_iou": round(iou, 6),
+                    "found": detection["found"],
+                    "confidence": detection["confidence"],
+                    "corner_error": corner_metrics,
+                }
+            )
+
+    payload: dict[str, Any] = {
+        "checkpoint": str(checkpoint_path),
+        "dataset": str(dataset_dir),
+        "manifest": str(manifest_path),
+        "split": split,
+        "sample_count": len(records),
+        "device": selected_device,
+        "threshold": threshold,
+        "mask_iou_mean": round(float(np.mean(ious)), 6),
+        "mask_iou_median": round(float(np.median(ious)), 6),
+        "corner_error_mean_px": round(float(np.mean(mean_corner_errors)), 4),
+        "corner_error_p95_px": round(float(np.percentile(mean_corner_errors, 95)), 4),
+        "corner_error_max_px": round(float(np.max(max_corner_errors)), 4),
+        "found_rate": round(float(found_count / max(1, len(records))), 6),
+    }
+    if include_samples:
+        payload["samples"] = sample_payloads
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return payload
 
 
@@ -305,6 +439,16 @@ def build_parser() -> argparse.ArgumentParser:
     predict.add_argument("--input", required=True)
     predict.add_argument("--output", help="Optional JSON output path. Prints JSON to stdout either way.")
     predict.add_argument("--threshold", type=float, default=0.5)
+
+    evaluate = subparsers.add_parser("evaluate", help="Evaluate a checkpoint on a dataset manifest.")
+    evaluate.add_argument("--checkpoint", required=True)
+    evaluate.add_argument("--dataset", required=True)
+    evaluate.add_argument("--split", default="val", choices=["train", "val", "all"])
+    evaluate.add_argument("--output", help="Optional JSON report path. Prints JSON to stdout either way.")
+    evaluate.add_argument("--threshold", type=float, default=0.5)
+    evaluate.add_argument("--limit", type=int)
+    evaluate.add_argument("--device", default="auto")
+    evaluate.add_argument("--include-samples", action="store_true")
     return parser
 
 
@@ -323,12 +467,23 @@ def main(argv: list[str] | None = None) -> int:
                 base_channels=args.base_channels,
                 device=args.device,
             )
-        else:
+        elif args.command == "predict":
             payload = predict_detector(
                 checkpoint_path=Path(args.checkpoint),
                 image_path=Path(args.input),
                 threshold=args.threshold,
                 output_path=Path(args.output) if args.output else None,
+            )
+        else:
+            payload = evaluate_detector(
+                checkpoint_path=Path(args.checkpoint),
+                dataset_dir=Path(args.dataset),
+                split=args.split,
+                threshold=args.threshold,
+                limit=args.limit,
+                device=args.device,
+                output_path=Path(args.output) if args.output else None,
+                include_samples=args.include_samples,
             )
     except TorchUnavailableError as exc:
         parser.exit(2, f"{exc}\n")
