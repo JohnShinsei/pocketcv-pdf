@@ -44,6 +44,7 @@ class AndroidPackagingTest(unittest.TestCase):
         launcher = (ROOT / "src" / "clearscan_cv" / "local_app.py").read_text(encoding="utf-8")
         build_script = (ROOT / "scripts" / "build_windows_local_app.ps1").read_text(encoding="utf-8")
         install_script = (ROOT / "scripts" / "install_android_debug.ps1").read_text(encoding="utf-8")
+        emulator_qa_script = (ROOT / "scripts" / "android_emulator_qa.ps1").read_text(encoding="utf-8")
 
         self.assertIn('pocketcv-local = "clearscan_cv.local_app:main"', pyproject)
         self.assertIn("uvicorn.run", launcher)
@@ -51,6 +52,9 @@ class AndroidPackagingTest(unittest.TestCase):
         self.assertIn("PyInstaller", build_script)
         self.assertIn("adb", install_script)
         self.assertIn("com.pocketcv.pdf/.MainActivity", install_script)
+        self.assertIn("PocketCV_API35", emulator_qa_script)
+        self.assertIn("uiautomator dump", emulator_qa_script)
+        self.assertIn("pocketcv-sample.jpg", emulator_qa_script)
 
 
 if __name__ == "__main__":
