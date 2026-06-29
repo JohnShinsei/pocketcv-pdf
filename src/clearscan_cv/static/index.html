@@ -3008,7 +3008,8 @@
                 adaptiveRadius
               );
               const strokeContrast = localMean - sharpened;
-              const paperNoiseGuard = sharpened > 176 && inkLum[pixel] < 84 && normalizedGradient < 42 && strokeContrast < 42;
+              const paperNoiseGuard = sharpened > 172 && inkLum[pixel] < 98 && normalizedGradient < 52 && strokeContrast < 48;
+              const antialiasGuard = sharpened > 158 && inkLum[pixel] < 118 && strokeContrast < 32 && normalizedGradient < 90;
               let sauvolaFine = false;
               let sauvolaBroad = false;
               if (useGatosSauvola && normalizedSquaredIntegral) {
@@ -3032,19 +3033,22 @@
                 );
                 sauvolaFine =
                   sharpened < sauvolaThresholdValue(smallStats.mean, smallStats.deviation, 0.18) - 7 &&
-                  strokeContrast > 13 &&
-                  (normalizedGradient > 18 || sharpened < 156);
+                  strokeContrast > 16 &&
+                  inkLum[pixel] > 38 &&
+                  (normalizedGradient > 24 || sharpened < 150);
                 sauvolaBroad =
                   sharpened < sauvolaThresholdValue(largeStats.mean, largeStats.deviation, 0.28) - 12 &&
-                  strokeContrast > 20 &&
-                  sharpened < 184;
+                  strokeContrast > 24 &&
+                  inkLum[pixel] > 54 &&
+                  sharpened < 176;
               }
               const localInk =
-                !paperNoiseGuard && strokeContrast > 31 && inkLum[pixel] > 48 && sharpened < 194 && normalizedGradient > 15;
-              const textBody = inkLum[pixel] > 162 && strokeContrast > 34 && sharpened < 134;
-              const textEdge = inkLum[pixel] > 92 && normalizedGradient > 64 && strokeContrast > 18 && sharpened < 178;
-              const deepInk = normCenter < 48 && inkLum[pixel] > 120 && normalizedGradient > 20;
-              const value = sauvolaFine || sauvolaBroad || localInk || textBody || textEdge || deepInk ? 0 : 255;
+                !paperNoiseGuard && strokeContrast > 34 && inkLum[pixel] > 64 && sharpened < 186 && normalizedGradient > 19;
+              const textBody = inkLum[pixel] > 172 && strokeContrast > 38 && sharpened < 128;
+              const textEdge = inkLum[pixel] > 118 && normalizedGradient > 78 && strokeContrast > 26 && sharpened < 166;
+              const deepInk = normCenter < 44 && inkLum[pixel] > 132 && normalizedGradient > 24;
+              const inkPixel = sauvolaFine || sauvolaBroad || localInk || textBody || textEdge || deepInk;
+              const value = inkPixel && !antialiasGuard ? 0 : 255;
               data[index] = value;
               data[index + 1] = value;
               data[index + 2] = value;
