@@ -420,6 +420,52 @@ def evaluate_detector(
     return payload
 
 
+def export_onnx_detector(
+    checkpoint_path: Path,
+    output_path: Path,
+    opset: int = 17,
+    dynamic_axes: bool = False,
+) -> dict[str, Any]:
+    torch, model, config, selected_device = _load_detector(checkpoint_path, device="cpu")
+    image_size = int(config.get("image_size", 256))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    wrapped = torch.nn.Sequential(model, torch.nn.Sigmoid())
+    wrapped.eval()
+    dummy = torch.zeros(1, 3, image_size, image_size, dtype=torch.float32)
+    axes = (
+        {
+            "input": {0: "batch", 2: "height", 3: "width"},
+            "mask": {0: "batch", 2: "height", 3: "width"},
+        }
+        if dynamic_axes
+        else None
+    )
+    torch.onnx.export(
+        wrapped,
+        dummy,
+        output_path,
+        input_names=["input"],
+        output_names=["mask"],
+        dynamic_axes=axes,
+        opset_version=opset,
+    )
+    sidecar_path = output_path.with_suffix(output_path.suffix + ".json")
+    payload = {
+        "onnx": str(output_path),
+        "metadata": str(sidecar_path),
+        "checkpoint": str(checkpoint_path),
+        "image_size": image_size,
+        "opset": opset,
+        "dynamic_axes": dynamic_axes,
+        "output": "sigmoid_mask_probability",
+        "postprocess": "resize mask to source image, then run mask_to_corners",
+        "device": selected_device,
+    }
+    sidecar_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    return payload
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train or run a lightweight document mask detector.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -449,6 +495,12 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--limit", type=int)
     evaluate.add_argument("--device", default="auto")
     evaluate.add_argument("--include-samples", action="store_true")
+
+    export_onnx = subparsers.add_parser("export-onnx", help="Export a checkpoint to ONNX for local/mobile inference.")
+    export_onnx.add_argument("--checkpoint", required=True)
+    export_onnx.add_argument("--out", required=True, help="Output .onnx model path.")
+    export_onnx.add_argument("--opset", type=int, default=17)
+    export_onnx.add_argument("--dynamic-axes", action="store_true", help="Allow dynamic batch/height/width axes.")
     return parser
 
 
@@ -474,7 +526,7 @@ def main(argv: list[str] | None = None) -> int:
                 threshold=args.threshold,
                 output_path=Path(args.output) if args.output else None,
             )
-        else:
+        elif args.command == "evaluate":
             payload = evaluate_detector(
                 checkpoint_path=Path(args.checkpoint),
                 dataset_dir=Path(args.dataset),
@@ -484,6 +536,13 @@ def main(argv: list[str] | None = None) -> int:
                 device=args.device,
                 output_path=Path(args.output) if args.output else None,
                 include_samples=args.include_samples,
+            )
+        else:
+            payload = export_onnx_detector(
+                checkpoint_path=Path(args.checkpoint),
+                output_path=Path(args.out),
+                opset=args.opset,
+                dynamic_axes=args.dynamic_axes,
             )
     except TorchUnavailableError as exc:
         parser.exit(2, f"{exc}\n")

@@ -74,18 +74,22 @@ def test_docnet_cli_help_does_not_require_torch() -> None:
     assert "Train or run a lightweight document mask detector" in completed.stdout
     assert "predict" in completed.stdout
     assert "evaluate" in completed.stdout
+    assert "export-onnx" in completed.stdout
 
 
-def test_docnet_parser_registers_train_predict_and_evaluate_commands() -> None:
+def test_docnet_parser_registers_train_predict_evaluate_and_export_commands() -> None:
     parser = build_parser()
 
     train_args = parser.parse_args(["train", "--dataset", "datasets/docnet", "--out", "models/docnet.pt"])
     predict_args = parser.parse_args(["predict", "--checkpoint", "models/docnet.pt", "--input", "photo.jpg"])
     evaluate_args = parser.parse_args(["evaluate", "--checkpoint", "models/docnet.pt", "--dataset", "datasets/docnet"])
+    export_args = parser.parse_args(["export-onnx", "--checkpoint", "models/docnet.pt", "--out", "models/docnet.onnx"])
 
     assert train_args.command == "train"
     assert predict_args.command == "predict"
     assert evaluate_args.command == "evaluate"
+    assert export_args.command == "export-onnx"
+    assert export_args.opset == 17
 
 
 def test_docnet_scripts_and_training_extra_are_registered() -> None:
@@ -93,3 +97,4 @@ def test_docnet_scripts_and_training_extra_are_registered() -> None:
 
     assert 'clearscan-docnet = "clearscan_cv.docnet:main"' in pyproject
     assert "torch>=2.2" in pyproject
+    assert "onnx>=1.16" in pyproject

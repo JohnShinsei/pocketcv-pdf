@@ -276,6 +276,15 @@ clearscan photos/page_001.jpg --out outputs/model_scan --mode gray --external-de
 
 このモデルは最初から画像全体を復元するのではなく、文書領域の mask と四隅を安定して推定する役割に限定しています。`evaluate` は validation split に対する mask IoU、四隅の平均/95 パーセンタイル誤差、検出成功率を JSON に保存します。透視変換、影除去、文字強調、PDF/OCR 出力は従来の OpenCV パイプラインで行うため、失敗時は自動検出や手動四隅調整に戻せます。
 
+ローカルアプリやモバイル推論へ持ち込む場合は、ONNX として書き出せます。
+
+```bash
+pip install -e .[onnx]
+clearscan-docnet export-onnx --checkpoint models/docnet.pt --out models/docnet.onnx
+```
+
+書き出される ONNX は sigmoid 済みの文書 mask probability を返します。推論側では mask を元画像サイズに戻し、`mask_to_corners` 相当の後処理で四隅を作り、既存の Homography 処理へ渡します。
+
 出力:
 
 - `*_clearscan.png`: 処理後画像
