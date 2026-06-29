@@ -6,6 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .export import build_pdf_bytes
 from .ocr import OcrUnavailableError, recognize_image, recover_layout_markdown
 from .pipeline import enhance_image
 
@@ -56,6 +57,8 @@ async def process_upload(
     ocr: bool = Form(False),
     ocr_lang: str = Form("jpn+eng"),
     ocr_engine: str = Form("auto"),
+    pdf: bool = Form(False),
+    searchable_pdf: bool = Form(False),
 ) -> dict[str, object]:
     data = await file.read()
     image = _decode_image(data)
@@ -75,11 +78,21 @@ async def process_upload(
         "image_base64": base64.b64encode(encoded).decode("ascii"),
         "report": result.report,
     }
-    if ocr:
+    ocr_result = None
+    if ocr or searchable_pdf:
         try:
             ocr_result = recognize_image(result.image, language=ocr_lang, engine=ocr_engine)  # type: ignore[arg-type]
         except OcrUnavailableError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         response["ocr"] = ocr_result.to_dict()
         response["layout_markdown"] = recover_layout_markdown(ocr_result)
+    if pdf or searchable_pdf:
+        pdf_bytes = build_pdf_bytes(
+            result.image,
+            title=Path(file.filename or "pocketcv-scan").stem,
+            ocr_result=ocr_result,
+            searchable=searchable_pdf,
+        )
+        response["pdf_base64"] = base64.b64encode(pdf_bytes).decode("ascii")
+        response["pdf_searchable"] = bool(searchable_pdf and ocr_result is not None and ocr_result.lines)
     return response

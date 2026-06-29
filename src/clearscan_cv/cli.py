@@ -7,6 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .export import write_pdf
 from .ocr import OcrUnavailableError, recognize_image, recover_layout_markdown
 from .pipeline import process_file
 
@@ -18,6 +19,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=["color", "gray", "binary"], default="color", help="Output style.")
     parser.add_argument("--no-warp", action="store_true", help="Disable automatic perspective correction.")
     parser.add_argument("--compare", action="store_true", help="Write a side-by-side comparison image.")
+    parser.add_argument("--pdf", action="store_true", help="Write an image-only PDF from the processed scan.")
+    parser.add_argument("--searchable-pdf", action="store_true", help="Run OCR and write a searchable PDF text layer.")
     parser.add_argument("--ocr", action="store_true", help="Run optional OCR on the processed scan and write a TXT file.")
     parser.add_argument("--ocr-lang", default="jpn+eng", help="OCR language code, for example jpn+eng, eng, chi_sim+eng.")
     parser.add_argument(
@@ -48,10 +51,13 @@ def main(argv: list[str] | None = None) -> int:
         auto_warp=not args.no_warp,
         side_by_side=args.compare,
     )
-    if args.ocr or args.layout:
-        output_path = Path(str(report["output_path"]))
+    output_path = Path(str(report["output_path"]))
+    output_image: np.ndarray | None = None
+    ocr_result = None
+    if args.ocr or args.layout or args.searchable_pdf:
+        output_image = _read_image(output_path)
         try:
-            ocr_result = recognize_image(_read_image(output_path), language=args.ocr_lang, engine=args.ocr_engine)
+            ocr_result = recognize_image(output_image, language=args.ocr_lang, engine=args.ocr_engine)
         except OcrUnavailableError as exc:
             parser.exit(2, f"OCR engine unavailable: {exc}\n")
 
@@ -65,6 +71,21 @@ def main(argv: list[str] | None = None) -> int:
             layout_path.write_text(recover_layout_markdown(ocr_result), encoding="utf-8")
             report["ocr_layout_path"] = str(layout_path)
 
+    if args.pdf or args.searchable_pdf:
+        if output_image is None:
+            output_image = _read_image(output_path)
+        pdf_path = output_path.with_name(f"{output_path.stem}_{'searchable' if args.searchable_pdf else 'scan'}.pdf")
+        pdf_export = write_pdf(
+            output_image,
+            pdf_path,
+            title=Path(args.input).stem,
+            ocr_result=ocr_result,
+            searchable=args.searchable_pdf,
+        )
+        report["pdf"] = pdf_export.to_dict()
+        report["pdf_path"] = str(pdf_path)
+
+    if args.ocr or args.layout or args.pdf or args.searchable_pdf:
         Path(str(report["report_path"])).write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2))
     return 0
