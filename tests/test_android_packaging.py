@@ -18,7 +18,7 @@ class AndroidPackagingTest(unittest.TestCase):
         self.assertIn("OnDeviceScanner.process", source)
         self.assertIn("カメラで撮影", source)
         self.assertIn("MediaStore.ACTION_IMAGE_CAPTURE", source)
-        self.assertIn("FileProvider.getUriForFile", source)
+        self.assertIn("MediaStore.Images.Media.EXTERNAL_CONTENT_URI", source)
         self.assertIn("API確認", source)
         self.assertIn('normalizedEndpoint() + "/api/health"', source)
         self.assertIn('normalizedEndpoint() + "/api/process"', source)
@@ -37,13 +37,8 @@ class AndroidPackagingTest(unittest.TestCase):
         self.assertIn("Imgproc.adaptiveThreshold", scanner)
         self.assertIn("PdfDocument", scanner)
         manifest = (ROOT / "android" / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
-        file_paths = (ROOT / "android" / "app" / "src" / "main" / "res" / "xml" / "file_paths.xml").read_text(encoding="utf-8")
-        gradle_props = (ROOT / "android" / "gradle.properties").read_text(encoding="utf-8")
 
-        self.assertIn("androidx.core.content.FileProvider", manifest)
         self.assertIn("android.hardware.camera.any", manifest)
-        self.assertIn("cache-path", file_paths)
-        self.assertIn("android.useAndroidX=true", gradle_props)
 
     def test_android_workflow_uploads_debug_apk(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "android.yml").read_text(encoding="utf-8")

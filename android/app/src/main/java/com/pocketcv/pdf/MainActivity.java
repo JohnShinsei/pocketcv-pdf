@@ -1,10 +1,12 @@
 package com.pocketcv.pdf;
 
 import android.app.Activity;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
@@ -23,13 +25,10 @@ import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 
-import androidx.core.content.FileProvider;
-
 import org.json.JSONObject;
 import org.opencv.android.OpenCVLoader;
 
 import java.io.ByteArrayOutputStream;
-import java.io.File;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -258,12 +257,16 @@ public class MainActivity extends Activity {
         }
         try {
             pendingCameraName = "pocketcv-capture-" + System.currentTimeMillis() + ".jpg";
-            File photoFile = new File(getCacheDir(), pendingCameraName);
-            pendingCameraUri = FileProvider.getUriForFile(
-                    this,
-                    getPackageName() + ".fileprovider",
-                    photoFile
-            );
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Images.Media.DISPLAY_NAME, pendingCameraName);
+            values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                values.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/PocketCV");
+            }
+            pendingCameraUri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+            if (pendingCameraUri == null) {
+                throw new IllegalStateException("撮影画像の保存先を作成できません。");
+            }
             intent.putExtra(MediaStore.EXTRA_OUTPUT, pendingCameraUri);
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
             startActivityForResult(intent, REQ_CAPTURE_IMAGE);
