@@ -23,6 +23,15 @@ api = [
   "python-multipart>=0.0.9",
   "uvicorn[standard]>=0.30"
 ]
+ocr = [
+  "pytesseract>=0.3.10"
+]
+rapidocr = [
+  "rapidocr-onnxruntime>=1.3.24"
+]
+paddleocr = [
+  "paddleocr>=2.8"
+]
 dev = [
   "pytest>=8.0"
 ]

@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 
+import cv2
+import numpy as np
+
+from .ocr import OcrUnavailableError, recognize_image, recover_layout_markdown
 from .pipeline import process_file
 
 
@@ -13,11 +18,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=["color", "gray", "binary"], default="color", help="Output style.")
     parser.add_argument("--no-warp", action="store_true", help="Disable automatic perspective correction.")
     parser.add_argument("--compare", action="store_true", help="Write a side-by-side comparison image.")
+    parser.add_argument("--ocr", action="store_true", help="Run optional OCR on the processed scan and write a TXT file.")
+    parser.add_argument("--ocr-lang", default="jpn+eng", help="OCR language code, for example jpn+eng, eng, chi_sim+eng.")
+    parser.add_argument(
+        "--ocr-engine",
+        choices=["auto", "rapidocr", "tesseract", "paddleocr"],
+        default="auto",
+        help="Optional OCR backend. Auto prefers Tesseract for Japanese and RapidOCR for Chinese/English.",
+    )
+    parser.add_argument("--layout", action="store_true", help="Recover a simple Markdown layout from OCR line boxes.")
     return parser
 
 
+def _read_image(path: str | Path) -> np.ndarray:
+    raw = np.fromfile(str(path), dtype=np.uint8)
+    image = cv2.imdecode(raw, cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise FileNotFoundError(f"Could not read image: {path}")
+    return image
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     report = process_file(
         input_path=args.input,
         output_dir=args.out,
@@ -25,10 +48,27 @@ def main(argv: list[str] | None = None) -> int:
         auto_warp=not args.no_warp,
         side_by_side=args.compare,
     )
+    if args.ocr or args.layout:
+        output_path = Path(str(report["output_path"]))
+        try:
+            ocr_result = recognize_image(_read_image(output_path), language=args.ocr_lang, engine=args.ocr_engine)
+        except OcrUnavailableError as exc:
+            parser.exit(2, f"OCR engine unavailable: {exc}\n")
+
+        text_path = output_path.with_name(f"{output_path.stem}_ocr.txt")
+        text_path.write_text(ocr_result.text, encoding="utf-8")
+        report["ocr"] = ocr_result.to_dict()
+        report["ocr_text_path"] = str(text_path)
+
+        if args.layout:
+            layout_path = output_path.with_name(f"{output_path.stem}_layout.md")
+            layout_path.write_text(recover_layout_markdown(ocr_result), encoding="utf-8")
+            report["ocr_layout_path"] = str(layout_path)
+
+        Path(str(report["report_path"])).write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2))
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

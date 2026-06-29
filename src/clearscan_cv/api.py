@@ -6,6 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .ocr import OcrUnavailableError, recognize_image, recover_layout_markdown
 from .pipeline import enhance_image
 
 try:
@@ -49,7 +50,13 @@ def service_worker() -> Response:
 
 
 @app.post("/api/process")
-async def process_upload(file: UploadFile = File(...), mode: str = Form("color")) -> dict[str, object]:
+async def process_upload(
+    file: UploadFile = File(...),
+    mode: str = Form("color"),
+    ocr: bool = Form(False),
+    ocr_lang: str = Form("jpn+eng"),
+    ocr_engine: str = Form("auto"),
+) -> dict[str, object]:
     data = await file.read()
     image = _decode_image(data)
 
@@ -62,9 +69,17 @@ async def process_upload(file: UploadFile = File(...), mode: str = Form("color")
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to encode processed image.")
 
-    return {
+    response: dict[str, object] = {
         "filename": file.filename,
         "mode": mode,
         "image_base64": base64.b64encode(encoded).decode("ascii"),
         "report": result.report,
     }
+    if ocr:
+        try:
+            ocr_result = recognize_image(result.image, language=ocr_lang, engine=ocr_engine)  # type: ignore[arg-type]
+        except OcrUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        response["ocr"] = ocr_result.to_dict()
+        response["layout_markdown"] = recover_layout_markdown(ocr_result)
+    return response
