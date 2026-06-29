@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from clearscan_cv.geometry import detect_bright_document_region, detect_connected_document_region, detect_document_corners, detect_hough_document_region  # noqa: E402
+from clearscan_cv.dewarp import dewarp_by_textline_columns, estimate_textline_column_offsets  # noqa: E402
 from clearscan_cv.pipeline import MAX_PROCESS_IMAGE_EDGE, MAX_PROCESS_IMAGE_PIXELS, deskew_by_text_lines, enhance_image, estimate_textline_skew, limit_image_resolution, process_file  # noqa: E402
 
 
@@ -80,6 +81,34 @@ def make_skewed_text_page(angle: float = 3.0) -> np.ndarray:
     center = (image.shape[1] / 2, image.shape[0] / 2)
     matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
     return cv2.warpAffine(image, matrix, (image.shape[1], image.shape[0]), borderValue=(255, 255, 255))
+
+
+def make_curved_text_page(amplitude: float = 22.0) -> np.ndarray:
+    image = np.full((520, 760, 3), 255, dtype=np.uint8)
+    for index in range(11):
+        y = 86 + index * 34
+        cv2.line(image, (90, y), (660, y), (35, 35, 35), 3, cv2.LINE_AA)
+        cv2.putText(image, f"CURVED LINE {index + 1}", (100, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (45, 45, 45), 1, cv2.LINE_AA)
+
+    height, width = image.shape[:2]
+    x_coords = np.arange(width, dtype=np.float32)
+    y_coords = np.arange(height, dtype=np.float32)
+    grid_x, grid_y = np.meshgrid(x_coords, y_coords)
+    shift = amplitude * np.sin((x_coords / max(1, width - 1)) * np.pi * 2.0)
+    map_y = (grid_y - shift.reshape(1, -1)).astype(np.float32)
+    return cv2.remap(image, grid_x.astype(np.float32), map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
+
+
+def make_complex_two_column_page() -> np.ndarray:
+    image = np.full((520, 760, 3), 255, dtype=np.uint8)
+    cv2.line(image, (380, 45), (380, 480), (35, 35, 35), 2, cv2.LINE_AA)
+    for index in range(9):
+        y = 80 + index * 38
+        cv2.line(image, (70, y), (330, y), (35, 35, 35), 2, cv2.LINE_AA)
+    for index in range(9):
+        y = 118 + index * 38
+        cv2.line(image, (430, y), (690, y), (35, 35, 35), 2, cv2.LINE_AA)
+    return image
 
 
 def make_shadowed_noisy_page() -> np.ndarray:
@@ -214,6 +243,24 @@ class PipelineTest(unittest.TestCase):
         self.assertGreater(confidence, 1.03)
         self.assertEqual(report["angle"], angle)
         self.assertLess(abs(corrected_angle), 1.0)
+
+    def test_textline_dewarp_reduces_column_offsets(self) -> None:
+        curved = make_curved_text_page()
+        _, before_offsets, before_confidence = estimate_textline_column_offsets(curved)
+        result = dewarp_by_textline_columns(curved)
+        _, after_offsets, after_confidence = estimate_textline_column_offsets(result.image)
+
+        self.assertTrue(result.report["applied"])
+        self.assertGreater(before_confidence, 0.08)
+        self.assertGreater(after_confidence, 0.08)
+        self.assertGreater(float(np.max(np.abs(before_offsets))), 10.0)
+        self.assertLess(float(np.max(np.abs(after_offsets))), float(np.max(np.abs(before_offsets))) * 0.72)
+
+    def test_textline_dewarp_skips_complex_two_column_layout(self) -> None:
+        result = dewarp_by_textline_columns(make_complex_two_column_page())
+
+        self.assertFalse(result.report["applied"])
+        self.assertEqual(result.report["reason"], "flat_or_low_confidence")
 
     def test_binary_enhancement_suppresses_shadow_noise(self) -> None:
         result = enhance_image(make_shadowed_noisy_page(), mode="binary", auto_warp=False)

@@ -55,6 +55,7 @@ def service_worker() -> Response:
 async def process_upload(
     file: UploadFile = File(...),
     mode: str = Form("color"),
+    auto_dewarp: bool = Form(True),
     ocr: bool = Form(False),
     ocr_lang: str = Form("jpn+eng"),
     ocr_engine: str = Form("auto"),
@@ -68,7 +69,7 @@ async def process_upload(
     image = _decode_image(data)
 
     try:
-        result = enhance_image(image, mode=mode)  # type: ignore[arg-type]
+        result = enhance_image(image, mode=mode, auto_dewarp=auto_dewarp)  # type: ignore[arg-type]
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

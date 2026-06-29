@@ -1,5 +1,6 @@
 """ClearScan CV package."""
 
+from .dewarp import dewarp_by_textline_columns, estimate_textline_column_offsets
 from .evaluation import character_error_rate, edit_distance, evaluate_ocr_result, evaluate_readability
 from .export import build_docx_bytes, build_pdf_bytes, write_docx, write_pdf
 from .ocr import recognize_image, recover_layout_markdown
@@ -9,10 +10,12 @@ __all__ = [
     "build_pdf_bytes",
     "build_docx_bytes",
     "character_error_rate",
+    "dewarp_by_textline_columns",
     "edit_distance",
     "enhance_image",
     "evaluate_ocr_result",
     "evaluate_readability",
+    "estimate_textline_column_offsets",
     "process_file",
     "recognize_image",
     "recover_layout_markdown",

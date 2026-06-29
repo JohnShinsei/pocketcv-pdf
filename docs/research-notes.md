@@ -57,6 +57,7 @@ PocketCV PDF は、スマートフォンや PC ブラウザで完結する文書
 - Cun and Pun, "High-Resolution Document Shadow Removal via A Large-Scale Real-World Dataset and A Frequency-Aware Shadow Erasing Net", ICCV 2023: 低周波影を消し、高周波の文字・図形境界を保護する設計思想。
 - Li et al., "Document Rectification and Illumination Correction using a Patch-based CNN", 2019: 幾何補正と光照補正を分離し、局所領域で補正する設計。
 - Feng et al., "DocTr", 2021: 幾何 unwarping と illumination correction を連結し、OCR 入力品質を上げる設計。
+- Jiang et al., "Revisiting Document Image Dewarping by Grid Regularization", CVPR 2022: 文書境界と文字行制約を使って deformation field を推定する考え方を、軽量な文字行投影ベース dewarp の設計に反映。
 
 ## 論文別メモ
 

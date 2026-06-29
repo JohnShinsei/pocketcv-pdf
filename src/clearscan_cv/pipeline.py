@@ -8,6 +8,7 @@ from typing import Literal
 import cv2
 import numpy as np
 
+from .dewarp import dewarp_by_textline_columns
 from .geometry import detect_document_corners, ensure_bgr, four_point_transform
 from .quality import assess_quality, compare_quality
 
@@ -331,14 +332,16 @@ def build_side_by_side(original: np.ndarray, processed: np.ndarray) -> np.ndarra
     return cv2.hconcat([left, gap, right])
 
 
-def enhance_image(image: np.ndarray, mode: OutputMode = "color", auto_warp: bool = True) -> EnhancementResult:
+def enhance_image(image: np.ndarray, mode: OutputMode = "color", auto_warp: bool = True, auto_dewarp: bool = True) -> EnhancementResult:
     if mode not in {"color", "gray", "binary"}:
         raise ValueError("mode must be one of: color, gray, binary")
 
     bgr = limit_image_resolution(ensure_bgr(image))
     detection = detect_document_corners(bgr)
     warped = four_point_transform(bgr, detection.corners) if auto_warp and detection.found else bgr.copy()
-    deskewed, deskew_report = deskew_by_text_lines(warped)
+    dewarp_result = dewarp_by_textline_columns(warped) if auto_dewarp else None
+    dewarped = dewarp_result.image if dewarp_result is not None else warped
+    deskewed, deskew_report = deskew_by_text_lines(dewarped)
     enhanced = normalize_illumination(deskewed)
 
     if mode == "binary":
@@ -352,11 +355,13 @@ def enhance_image(image: np.ndarray, mode: OutputMode = "color", auto_warp: bool
     report = {
         "mode": mode,
         "auto_warp": auto_warp,
+        "auto_dewarp": auto_dewarp,
         "document_detection": detection.to_dict(),
+        "dewarp": dewarp_result.report if dewarp_result is not None else {"applied": False, "method": "disabled"},
         "deskew": deskew_report,
         "quality": compare_quality(deskewed, quality_after),
         "output_quality": assess_quality(output),
-        "pipeline": ["document_detection", "perspective_correction", "textline_deskew", "illumination_normalization", mode],
+        "pipeline": ["document_detection", "perspective_correction", "textline_dewarp", "textline_deskew", "illumination_normalization", mode],
     }
     return EnhancementResult(image=output, report=report)
 
@@ -366,6 +371,7 @@ def process_file(
     output_dir: str | Path = "outputs",
     mode: OutputMode = "color",
     auto_warp: bool = True,
+    auto_dewarp: bool = True,
     side_by_side: bool = False,
 ) -> dict[str, object]:
     input_path = Path(input_path)
@@ -377,7 +383,7 @@ def process_file(
     if image is None:
         raise FileNotFoundError(f"Could not read image: {input_path}")
 
-    result = enhance_image(image, mode=mode, auto_warp=auto_warp)
+    result = enhance_image(image, mode=mode, auto_warp=auto_warp, auto_dewarp=auto_dewarp)
     output_path = output_dir / f"{input_path.stem}_clearscan.png"
     report_path = output_dir / f"{input_path.stem}_report.json"
     cv2.imwrite(str(output_path), result.image)

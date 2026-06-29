@@ -19,6 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", default="outputs", help="Output directory.")
     parser.add_argument("--mode", choices=["color", "gray", "binary"], default="color", help="Output style.")
     parser.add_argument("--no-warp", action="store_true", help="Disable automatic perspective correction.")
+    parser.add_argument("--no-dewarp", action="store_true", help="Disable lightweight textline dewarping.")
     parser.add_argument("--compare", action="store_true", help="Write a side-by-side comparison image.")
     parser.add_argument("--pdf", action="store_true", help="Write an image-only PDF from the processed scan.")
     parser.add_argument("--searchable-pdf", action="store_true", help="Run OCR and write a searchable PDF text layer.")
@@ -53,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         output_dir=args.out,
         mode=args.mode,
         auto_warp=not args.no_warp,
+        auto_dewarp=not args.no_dewarp,
         side_by_side=args.compare,
     )
     output_path = Path(str(report["output_path"]))
