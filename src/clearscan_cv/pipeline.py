@@ -136,6 +136,72 @@ def sauvola_threshold(gray_float: np.ndarray, window_size: int, k: float = 0.28,
     return mean * (1.0 + k * (deviation / r - 1.0))
 
 
+def estimate_hough_textline_skew(image: np.ndarray, max_angle: float = 6.0) -> tuple[float, float]:
+    bgr = limit_image_resolution(ensure_bgr(image), max_edge=1400, max_pixels=1_800_000)
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    height, width = gray.shape[:2]
+    if min(height, width) < 80:
+        return 0.0, 0.0
+
+    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    edges = cv2.Canny(blur, 42, 142)
+    min_line_length = max(24, int(round(width * 0.035)))
+    max_line_gap = max(6, int(round(width * 0.012)))
+    threshold = max(36, int(round(width * 0.045)))
+    raw_lines = cv2.HoughLinesP(
+        edges,
+        1,
+        np.pi / 180.0,
+        threshold=threshold,
+        minLineLength=min_line_length,
+        maxLineGap=max_line_gap,
+    )
+    if raw_lines is None:
+        return 0.0, 0.0
+
+    angles: list[float] = []
+    weights: list[float] = []
+    for x1, y1, x2, y2 in raw_lines[:, 0, :]:
+        dx = float(x2 - x1)
+        dy = float(y2 - y1)
+        if abs(dx) < 1.0:
+            continue
+        length = float(np.hypot(dx, dy))
+        if length < min_line_length or length > width * 0.42:
+            continue
+        angle = float(np.degrees(np.arctan2(dy, dx)))
+        if angle > 90.0:
+            angle -= 180.0
+        elif angle < -90.0:
+            angle += 180.0
+        if abs(angle) > max_angle:
+            continue
+        angles.append(angle)
+        weights.append(length)
+
+    if len(angles) < 12:
+        return 0.0, 0.0
+
+    angle_array = np.asarray(angles, dtype=np.float32)
+    weight_array = np.asarray(weights, dtype=np.float32)
+    low, high = np.percentile(angle_array, [12, 88])
+    inlier_mask = (angle_array >= low) & (angle_array <= high)
+    if int(np.sum(inlier_mask)) < 8:
+        return 0.0, 0.0
+
+    inlier_angles = angle_array[inlier_mask]
+    inlier_weights = weight_array[inlier_mask]
+    orientation = float(np.average(inlier_angles, weights=inlier_weights))
+    spread = float(np.std(inlier_angles))
+    confidence = 1.0 + min(0.24, len(inlier_angles) / 520.0) + min(
+        0.16,
+        max(0.0, max_angle - spread) / max_angle * 0.16,
+    )
+    if abs(orientation) < 0.25 or confidence < 1.045:
+        return 0.0, round(confidence, 3)
+    return round(orientation, 3), round(confidence, 3)
+
+
 def estimate_textline_skew(image: np.ndarray, max_angle: float = 6.0, step: float = 0.5) -> tuple[float, float]:
     bgr = limit_image_resolution(ensure_bgr(image))
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
@@ -151,7 +217,7 @@ def estimate_textline_skew(image: np.ndarray, max_angle: float = 6.0, step: floa
     mask = blur <= dark_threshold
     ys, xs = np.nonzero(mask)
     if xs.size < small.size * 0.003:
-        return 0.0, 0.0
+        return estimate_hough_textline_skew(image, max_angle=max_angle)
 
     if xs.size > 90000:
         stride = max(1, xs.size // 90000)
@@ -180,11 +246,17 @@ def estimate_textline_skew(image: np.ndarray, max_angle: float = 6.0, step: floa
             best_angle = float(angle)
 
     if abs(best_angle) < 0.25:
-        return 0.0, 0.0
+        hough_angle, hough_confidence = estimate_hough_textline_skew(image, max_angle=max_angle)
+        if abs(hough_angle) >= 0.25 and hough_confidence >= 1.045:
+            return hough_angle, hough_confidence
+        return 0.0, round(hough_confidence, 3)
 
     improvement = best_score / max(zero_score, 1.0)
     if improvement < 1.035:
-        return 0.0, round(float(improvement), 3)
+        hough_angle, hough_confidence = estimate_hough_textline_skew(image, max_angle=max_angle)
+        if abs(hough_angle) >= 0.25 and hough_confidence >= 1.045:
+            return hough_angle, hough_confidence
+        return 0.0, round(float(max(improvement, hough_confidence)), 3)
     return round(best_angle, 3), round(float(improvement), 3)
 
 
@@ -295,26 +367,37 @@ def to_clean_binary(image: np.ndarray) -> np.ndarray:
     foreground = 255 - binary
     count, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, 8)
     kept = np.zeros_like(foreground)
+    edge_margin_x = max(6, int(round(foreground.shape[1] * 0.025)))
+    edge_margin_y = max(6, int(round(foreground.shape[0] * 0.025)))
     for label in range(1, count):
         area = stats[label, cv2.CC_STAT_AREA]
+        left = stats[label, cv2.CC_STAT_LEFT]
+        top = stats[label, cv2.CC_STAT_TOP]
         width = stats[label, cv2.CC_STAT_WIDTH]
         height = stats[label, cv2.CC_STAT_HEIGHT]
         touches_edge = (
-            stats[label, cv2.CC_STAT_LEFT] <= 1
-            or stats[label, cv2.CC_STAT_TOP] <= 1
-            or stats[label, cv2.CC_STAT_LEFT] + width >= foreground.shape[1] - 2
-            or stats[label, cv2.CC_STAT_TOP] + height >= foreground.shape[0] - 2
+            left <= 1
+            or top <= 1
+            or left + width >= foreground.shape[1] - 2
+            or top + height >= foreground.shape[0] - 2
+        )
+        near_edge = (
+            left <= edge_margin_x
+            or top <= edge_margin_y
+            or left + width >= foreground.shape[1] - edge_margin_x
+            or top + height >= foreground.shape[0] - edge_margin_y
         )
         density = area / max(1, width * height)
         aspect = max(width, height) / max(1, min(width, height))
-        is_edge_stain = touches_edge and area > max(160, foreground.size * 0.0006) and (
+        is_edge_stain = (touches_edge or near_edge) and area > max(120, foreground.size * 0.00045) and (
             (width > foreground.shape[1] * 0.12 and height > 8) or (height > foreground.shape[0] * 0.12 and width > 8)
         )
+        is_near_edge_blob = near_edge and area > max(240, foreground.size * 0.0012) and (density > 0.22 or aspect > 4.0)
         is_large_blob = area > foreground.size * 0.014 and min(width, height) > 16
         is_tiny_dust = area <= 4 or (area <= 12 and width <= 6 and height <= 6)
         is_sparse_texture = area < 30 and density < 0.16 and max(width, height) < 22
         is_small_text = area >= 5 and (aspect >= 2.0 or max(width, height) >= 8)
-        if not (is_edge_stain or is_large_blob or is_tiny_dust or is_sparse_texture) and (area >= 14 or is_small_text):
+        if not (is_edge_stain or is_near_edge_blob or is_large_blob or is_tiny_dust or is_sparse_texture) and (area >= 14 or is_small_text):
             kept[labels == label] = 255
     return 255 - kept
 

@@ -2458,7 +2458,7 @@
         return output;
       }
 
-      function estimateTextLineSkew(sourceCanvas) {
+      function estimateHoughTextLineSkew(sourceCanvas) {
         const { width, height } = sourceCanvas;
         if (Math.min(width, height) < 80) {
           return { angle: 0, confidence: 0 };
@@ -2467,32 +2467,35 @@
         const context = sourceCanvas.getContext("2d", { willReadFrequently: true });
         const image = context.getImageData(0, 0, width, height);
         const data = image.data;
-        const step = Math.max(1, Math.floor(Math.max(width, height) / 900));
-        const histogram = new Array(256).fill(0);
-        let samples = 0;
-        for (let y = 0; y < height; y += step) {
-          for (let x = 0; x < width; x += step) {
-            const index = (y * width + x) * 4;
-            const value = Math.round(luminance(data[index], data[index + 1], data[index + 2]));
-            histogram[value] += 1;
-            samples += 1;
-          }
-        }
-
-        const darkThreshold = clamp(Math.min(otsuThreshold(histogram, samples), percentileFromHistogram(histogram, samples, 0.35)) - 2, 35, 185);
+        const step = Math.max(1, Math.floor(Math.max(width, height) / 1000));
         const points = [];
         const pointLimit = 90000;
-        const pointStep = Math.max(step, Math.floor(Math.sqrt((width * height) / pointLimit)));
-        for (let y = 0; y < height; y += pointStep) {
-          for (let x = 0; x < width; x += pointStep) {
+        const pointStride = Math.max(step, Math.floor(Math.sqrt((width * height) / pointLimit)));
+
+        for (let y = pointStride; y < height - pointStride; y += pointStride) {
+          for (let x = pointStride; x < width - pointStride; x += pointStride) {
             const index = (y * width + x) * 4;
-            if (luminance(data[index], data[index + 1], data[index + 2]) <= darkThreshold) {
+            const center = luminance(data[index], data[index + 1], data[index + 2]);
+            const leftIndex = (y * width + x - pointStride) * 4;
+            const rightIndex = (y * width + x + pointStride) * 4;
+            const topIndex = ((y - pointStride) * width + x) * 4;
+            const bottomIndex = ((y + pointStride) * width + x) * 4;
+            const horizontalGradient = Math.abs(
+              luminance(data[rightIndex], data[rightIndex + 1], data[rightIndex + 2]) -
+                luminance(data[leftIndex], data[leftIndex + 1], data[leftIndex + 2])
+            );
+            const verticalGradient = Math.abs(
+              luminance(data[bottomIndex], data[bottomIndex + 1], data[bottomIndex + 2]) -
+                luminance(data[topIndex], data[topIndex + 1], data[topIndex + 2])
+            );
+            const gradient = horizontalGradient + verticalGradient;
+            if (gradient > 58 && center < 235 && verticalGradient >= horizontalGradient * 0.42) {
               points.push({ x: x - width / 2, y: y - height / 2 });
             }
           }
         }
 
-        if (points.length < (width * height) / (pointStep * pointStep) * 0.003) {
+        if (points.length < 12) {
           return { angle: 0, confidence: 0 };
         }
 
@@ -2528,8 +2531,88 @@
         }
 
         const confidence = bestScore / Math.max(zeroScore, 1);
-        if (Math.abs(bestAngle) < 0.25 || confidence < 1.035) {
+        if (Math.abs(bestAngle) < 0.25 || confidence < 1.045) {
           return { angle: 0, confidence: Math.round(confidence * 1000) / 1000 };
+        }
+        return { angle: Math.round(bestAngle * 1000) / 1000, confidence: Math.round(confidence * 1000) / 1000 };
+      }
+
+      function estimateTextLineSkew(sourceCanvas) {
+        const { width, height } = sourceCanvas;
+        if (Math.min(width, height) < 80) {
+          return { angle: 0, confidence: 0 };
+        }
+
+        const context = sourceCanvas.getContext("2d", { willReadFrequently: true });
+        const image = context.getImageData(0, 0, width, height);
+        const data = image.data;
+        const step = Math.max(1, Math.floor(Math.max(width, height) / 900));
+        const histogram = new Array(256).fill(0);
+        let samples = 0;
+        for (let y = 0; y < height; y += step) {
+          for (let x = 0; x < width; x += step) {
+            const index = (y * width + x) * 4;
+            const value = Math.round(luminance(data[index], data[index + 1], data[index + 2]));
+            histogram[value] += 1;
+            samples += 1;
+          }
+        }
+
+        const darkThreshold = clamp(Math.min(otsuThreshold(histogram, samples), percentileFromHistogram(histogram, samples, 0.35)) - 2, 35, 185);
+        const points = [];
+        const pointLimit = 90000;
+        const pointStep = Math.max(step, Math.floor(Math.sqrt((width * height) / pointLimit)));
+        for (let y = 0; y < height; y += pointStep) {
+          for (let x = 0; x < width; x += pointStep) {
+            const index = (y * width + x) * 4;
+            if (luminance(data[index], data[index + 1], data[index + 2]) <= darkThreshold) {
+              points.push({ x: x - width / 2, y: y - height / 2 });
+            }
+          }
+        }
+
+        if (points.length < (width * height) / (pointStep * pointStep) * 0.003) {
+          return estimateHoughTextLineSkew(sourceCanvas);
+        }
+
+        const diagonal = Math.ceil(Math.hypot(width, height)) + 3;
+        const offset = Math.floor(diagonal / 2);
+        let bestAngle = 0;
+        let bestScore = -1;
+        let zeroScore = 0;
+        for (let angle = -6; angle <= 6.0001; angle += 0.5) {
+          const radians = (angle * Math.PI) / 180;
+          const cos = Math.cos(radians);
+          const sin = Math.sin(radians);
+          const bins = new Uint32Array(diagonal);
+          points.forEach((point) => {
+            const projectedY = Math.round(point.y * cos - point.x * sin) + offset;
+            if (projectedY >= 0 && projectedY < diagonal) {
+              bins[projectedY] += 1;
+            }
+          });
+
+          let score = 0;
+          for (let index = 0; index < bins.length; index += 1) {
+            score += bins[index] * bins[index];
+          }
+          score /= Math.max(1, points.length);
+          if (Math.abs(angle) < 0.01) {
+            zeroScore = score;
+          }
+          if (score > bestScore) {
+            bestScore = score;
+            bestAngle = angle;
+          }
+        }
+
+        const confidence = bestScore / Math.max(zeroScore, 1);
+        if (Math.abs(bestAngle) < 0.25 || confidence < 1.035) {
+          const hough = estimateHoughTextLineSkew(sourceCanvas);
+          if (Math.abs(hough.angle) >= 0.25 && hough.confidence >= 1.045) {
+            return hough;
+          }
+          return { angle: 0, confidence: Math.round(Math.max(confidence, hough.confidence) * 1000) / 1000 };
         }
         return { angle: Math.round(bestAngle * 1000) / 1000, confidence: Math.round(confidence * 1000) / 1000 };
       }
@@ -2799,15 +2882,21 @@
           const area = tail;
           const boxWidth = maxX - minX + 1;
           const boxHeight = maxY - minY + 1;
+          const edgeMarginX = Math.max(6, Math.round(width * 0.025));
+          const edgeMarginY = Math.max(6, Math.round(height * 0.025));
           const touchesOuterEdge = minX <= 1 || minY <= 1 || maxX >= width - 2 || maxY >= height - 2;
+          const nearOuterEdge = minX <= edgeMarginX || minY <= edgeMarginY || maxX >= width - edgeMarginX || maxY >= height - edgeMarginY;
           const removeDust = area <= 3 || (area <= 9 && boxWidth <= 5 && boxHeight <= 5);
           const removeEdgeStain =
-            touchesOuterEdge &&
-            area > Math.max(180, pixelCount * 0.00075) &&
-            ((boxWidth > width * 0.16 && boxHeight > 10) || (boxHeight > height * 0.16 && boxWidth > 10));
+            (touchesOuterEdge || nearOuterEdge) &&
+            area > Math.max(120, pixelCount * 0.00045) &&
+            ((boxWidth > width * 0.12 && boxHeight > 8) || (boxHeight > height * 0.12 && boxWidth > 8));
+          const density = area / Math.max(1, boxWidth * boxHeight);
+          const aspect = Math.max(boxWidth, boxHeight) / Math.max(1, Math.min(boxWidth, boxHeight));
+          const removeNearEdgeBlob = nearOuterEdge && area > Math.max(240, pixelCount * 0.0012) && (density > 0.22 || aspect > 4);
           const removeLargeBlob = area > pixelCount * 0.012 && Math.min(boxWidth, boxHeight) > 18;
 
-          if (removeDust || removeEdgeStain || removeLargeBlob) {
+          if (removeDust || removeEdgeStain || removeNearEdgeBlob || removeLargeBlob) {
             whiteComponent(area);
           }
         }

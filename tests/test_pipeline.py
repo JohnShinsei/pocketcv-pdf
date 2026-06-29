@@ -17,7 +17,17 @@ sys.path.insert(0, str(ROOT / "src"))
 from clearscan_cv.corners import parse_corner_points  # noqa: E402
 from clearscan_cv.geometry import detect_bright_document_region, detect_connected_document_region, detect_document_corners, detect_hough_document_region  # noqa: E402
 from clearscan_cv.dewarp import dewarp_by_textline_columns, estimate_textline_column_offsets  # noqa: E402
-from clearscan_cv.pipeline import MAX_PROCESS_IMAGE_EDGE, MAX_PROCESS_IMAGE_PIXELS, deskew_by_text_lines, enhance_image, estimate_textline_skew, limit_image_resolution, process_file  # noqa: E402
+from clearscan_cv.pipeline import (  # noqa: E402
+    MAX_PROCESS_IMAGE_EDGE,
+    MAX_PROCESS_IMAGE_PIXELS,
+    deskew_by_text_lines,
+    enhance_image,
+    estimate_hough_textline_skew,
+    estimate_textline_skew,
+    limit_image_resolution,
+    process_file,
+    rotate_image_keep_content,
+)
 
 
 def make_synthetic_document() -> np.ndarray:
@@ -178,6 +188,14 @@ def make_soft_antialiased_text_page() -> np.ndarray:
     return cv2.GaussianBlur(image, (3, 3), 0)
 
 
+def make_near_edge_artifact_page() -> np.ndarray:
+    image = make_soft_antialiased_text_page()
+    cv2.rectangle(image, (8, 20), (280, 34), (0, 0, 0), -1)
+    cv2.rectangle(image, (720, 150), (742, 450), (0, 0, 0), -1)
+    cv2.rectangle(image, (230, 498), (620, 514), (0, 0, 0), -1)
+    return image
+
+
 class PipelineTest(unittest.TestCase):
     def test_detects_document_quad(self) -> None:
         detection = detect_document_corners(make_synthetic_document())
@@ -267,6 +285,16 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(report["angle"], angle)
         self.assertLess(abs(corrected_angle), 1.0)
 
+    def test_hough_textline_skew_ignores_vertical_rules(self) -> None:
+        page = rotate_image_keep_content(make_complex_two_column_page(), 3.0)
+        angle, confidence = estimate_hough_textline_skew(page)
+        corrected = rotate_image_keep_content(page, angle)
+        corrected_angle, _ = estimate_hough_textline_skew(corrected)
+
+        self.assertAlmostEqual(angle, -3.0, delta=0.65)
+        self.assertGreater(confidence, 1.04)
+        self.assertLess(abs(corrected_angle), 0.75)
+
     def test_textline_dewarp_reduces_column_offsets(self) -> None:
         curved = make_curved_text_page()
         _, before_offsets, before_confidence = estimate_textline_column_offsets(curved)
@@ -327,6 +355,15 @@ class PipelineTest(unittest.TestCase):
 
         self.assertGreater(black_ratio, 0.01)
         self.assertLess(black_ratio, 0.055)
+
+    def test_binary_enhancement_removes_near_edge_artifacts(self) -> None:
+        result = enhance_image(make_near_edge_artifact_page(), mode="binary", auto_warp=False)
+        binary = result.image
+
+        self.assertGreater(float(np.mean(binary[15:42, 0:310] > 245)), 0.98)
+        self.assertGreater(float(np.mean(binary[130:470, 705:755] > 245)), 0.98)
+        self.assertGreater(float(np.mean(binary[488:519, 210:650] > 245)), 0.98)
+        self.assertGreater(float(np.mean(binary[58:455, 55:650] < 128)), 0.01)
 
     def test_process_file_writes_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -472,6 +509,9 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("grid-template-columns: minmax(520px, 1fr) minmax(360px, 440px)", html)
         self.assertIn("deskewCanvasByTextLines", html)
         self.assertIn("estimateTextLineSkew", html)
+        self.assertIn("estimateHoughTextLineSkew", html)
+        self.assertIn("nearOuterEdge", html)
+        self.assertIn("removeNearEdgeBlob", html)
         self.assertIn("文字行傾き補正", html)
         self.assertIn("件目を上へ移動", html)
         self.assertIn("端末内でPDFを生成中", html)
@@ -505,7 +545,7 @@ class PipelineTest(unittest.TestCase):
         worker = (ROOT / "src" / "clearscan_cv" / "static" / "sw.js").read_text(encoding="utf-8")
 
         self.assertIn("CACHE_NAME", worker)
-        self.assertIn("pocketcv-pdf-v12", worker)
+        self.assertIn("pocketcv-pdf-v13", worker)
         self.assertIn("install", worker)
         self.assertIn("fetch", worker)
         self.assertIn("event.request.mode === \"navigate\"", worker)
