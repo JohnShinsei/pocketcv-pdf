@@ -820,6 +820,7 @@
               <button id="ocr-download" class="secondary-action" type="button" disabled>TXT保存</button>
               <button id="layout-copy" class="secondary-action" type="button" disabled>MDコピー</button>
               <button id="layout-download" class="secondary-action" type="button" disabled>MD保存</button>
+              <button id="docx-download" class="secondary-action" type="button" disabled>DOCX保存</button>
             </div>
           </div>
           <div class="ocr-body">
@@ -925,6 +926,7 @@
       const ocrDownloadButton = document.querySelector("#ocr-download");
       const layoutCopyButton = document.querySelector("#layout-copy");
       const layoutDownloadButton = document.querySelector("#layout-download");
+      const docxDownloadButton = document.querySelector("#docx-download");
       const ocrOutputEl = document.querySelector("#ocr-output");
       const layoutOutputEl = document.querySelector("#layout-output");
       const cornerDialog = document.querySelector("#corner-dialog");
@@ -948,6 +950,7 @@
         ocrDownloadButton.disabled = blocked || !state.ocrText;
         layoutCopyButton.disabled = blocked || !state.layoutText;
         layoutDownloadButton.disabled = blocked || !state.layoutText;
+        docxDownloadButton.disabled = blocked || (!state.layoutText && !state.ocrText);
       }
 
       function setBusy(value) {
@@ -1781,6 +1784,245 @@
         link.remove();
         window.setTimeout(() => URL.revokeObjectURL(url), 800);
         setOcrStatus("Markdownを保存しました。");
+      }
+
+      function xmlEscape(value) {
+        return String(value || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      function docxParagraphXml(text, style = "") {
+        const styleXml = style ? `<w:pPr><w:pStyle w:val="${style}"/></w:pPr>` : "";
+        return `<w:p>${styleXml}<w:r><w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r></w:p>`;
+      }
+
+      function docxParagraphsFromMarkdown(markdown, title) {
+        const paragraphs = [docxParagraphXml(title, "Title")];
+        const blocks = String(markdown || "")
+          .trim()
+          .split(/\n\s*\n/g)
+          .map((block) => block.trim())
+          .filter(Boolean);
+        blocks.forEach((block) => {
+          if (block.startsWith("## ")) {
+            paragraphs.push(docxParagraphXml(block.slice(3).trim(), "Heading2"));
+          } else if (block.startsWith("# ")) {
+            paragraphs.push(docxParagraphXml(block.slice(2).trim(), "Heading2"));
+          } else {
+            paragraphs.push(docxParagraphXml(block.replace(/\s*\n\s*/g, " ")));
+          }
+        });
+        return paragraphs;
+      }
+
+      function docxContentTypesXml() {
+        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>`;
+      }
+
+      function docxRelsXml() {
+        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>`;
+      }
+
+      function docxDocumentRelsXml() {
+        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`;
+      }
+
+      function docxStylesXml() {
+        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/><w:rPr><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:qFormat/><w:pPr><w:spacing w:after="240"/></w:pPr><w:rPr><w:b/><w:sz w:val="34"/><w:szCs w:val="34"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="180" w:after="80"/></w:pPr><w:rPr><w:b/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr></w:style>
+</w:styles>`;
+      }
+
+      function docxDocumentXml(markdown, title) {
+        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    ${docxParagraphsFromMarkdown(markdown, title).join("")}
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>
+  </w:body>
+</w:document>`;
+      }
+
+      function docxCoreXml(title) {
+        const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>${xmlEscape(title)}</dc:title>
+  <dc:creator>PocketCV PDF</dc:creator>
+  <cp:lastModifiedBy>PocketCV PDF</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified>
+</cp:coreProperties>`;
+      }
+
+      function docxAppXml() {
+        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>PocketCV PDF</Application><Company>PocketCV PDF</Company>
+</Properties>`;
+      }
+
+      let crc32Table = null;
+      function crc32(bytes) {
+        if (!crc32Table) {
+          crc32Table = new Uint32Array(256);
+          for (let index = 0; index < 256; index += 1) {
+            let value = index;
+            for (let bit = 0; bit < 8; bit += 1) {
+              value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+            }
+            crc32Table[index] = value >>> 0;
+          }
+        }
+        let crc = 0xffffffff;
+        for (let index = 0; index < bytes.length; index += 1) {
+          crc = crc32Table[(crc ^ bytes[index]) & 0xff] ^ (crc >>> 8);
+        }
+        return (crc ^ 0xffffffff) >>> 0;
+      }
+
+      function dosDateTime(date = new Date()) {
+        const time = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
+        const dosDate = ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+        return { time, date: dosDate };
+      }
+
+      function writeZipHeader(view, offset, signature, fields) {
+        view.setUint32(offset, signature, true);
+        let cursor = offset + 4;
+        fields.forEach((field) => {
+          if (field.size === 2) {
+            view.setUint16(cursor, field.value, true);
+          } else {
+            view.setUint32(cursor, field.value, true);
+          }
+          cursor += field.size;
+        });
+      }
+
+      function buildZipStore(files) {
+        const entries = files.map((file) => ({
+          name: textBytes(file.name),
+          data: typeof file.content === "string" ? textBytes(file.content) : file.content,
+        }));
+        const { time, date } = dosDateTime();
+        let localOffset = 0;
+        const locals = [];
+        const centrals = [];
+        entries.forEach((entry) => {
+          const crc = crc32(entry.data);
+          const local = new Uint8Array(30 + entry.name.length + entry.data.length);
+          const localView = new DataView(local.buffer);
+          writeZipHeader(localView, 0, 0x04034b50, [
+            { size: 2, value: 20 },
+            { size: 2, value: 0x0800 },
+            { size: 2, value: 0 },
+            { size: 2, value: time },
+            { size: 2, value: date },
+            { size: 4, value: crc },
+            { size: 4, value: entry.data.length },
+            { size: 4, value: entry.data.length },
+            { size: 2, value: entry.name.length },
+            { size: 2, value: 0 },
+          ]);
+          local.set(entry.name, 30);
+          local.set(entry.data, 30 + entry.name.length);
+          locals.push(local);
+
+          const central = new Uint8Array(46 + entry.name.length);
+          const centralView = new DataView(central.buffer);
+          writeZipHeader(centralView, 0, 0x02014b50, [
+            { size: 2, value: 20 },
+            { size: 2, value: 20 },
+            { size: 2, value: 0x0800 },
+            { size: 2, value: 0 },
+            { size: 2, value: time },
+            { size: 2, value: date },
+            { size: 4, value: crc },
+            { size: 4, value: entry.data.length },
+            { size: 4, value: entry.data.length },
+            { size: 2, value: entry.name.length },
+            { size: 2, value: 0 },
+            { size: 2, value: 0 },
+            { size: 2, value: 0 },
+            { size: 2, value: 0 },
+            { size: 4, value: 0 },
+            { size: 4, value: localOffset },
+          ]);
+          central.set(entry.name, 46);
+          centrals.push(central);
+          localOffset += local.length;
+        });
+
+        const centralOffset = locals.reduce((sum, item) => sum + item.length, 0);
+        const centralSize = centrals.reduce((sum, item) => sum + item.length, 0);
+        const end = new Uint8Array(22);
+        const endView = new DataView(end.buffer);
+        writeZipHeader(endView, 0, 0x06054b50, [
+          { size: 2, value: 0 },
+          { size: 2, value: 0 },
+          { size: 2, value: entries.length },
+          { size: 2, value: entries.length },
+          { size: 4, value: centralSize },
+          { size: 4, value: centralOffset },
+          { size: 2, value: 0 },
+        ]);
+        return concatBytes([...locals, ...centrals, end]);
+      }
+
+      function buildDocxBytes(markdown, title) {
+        return buildZipStore([
+          { name: "[Content_Types].xml", content: docxContentTypesXml() },
+          { name: "_rels/.rels", content: docxRelsXml() },
+          { name: "word/_rels/document.xml.rels", content: docxDocumentRelsXml() },
+          { name: "word/document.xml", content: docxDocumentXml(markdown, title) },
+          { name: "word/styles.xml", content: docxStylesXml() },
+          { name: "docProps/core.xml", content: docxCoreXml(title) },
+          { name: "docProps/app.xml", content: docxAppXml() },
+        ]);
+      }
+
+      function downloadDocxDocument() {
+        const content = state.layoutText || state.ocrText;
+        if (!content) {
+          return;
+        }
+
+        const title = sanitizePdfName(filenameInput.value);
+        const blob = new Blob([buildDocxBytes(content, title)], {
+          type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${title}.docx`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 800);
+        setOcrStatus("DOCXを保存しました。");
       }
 
       function loadImage(blob) {
@@ -4178,6 +4420,7 @@
       ocrDownloadButton.addEventListener("click", downloadOcrText);
       layoutCopyButton.addEventListener("click", copyLayoutText);
       layoutDownloadButton.addEventListener("click", downloadLayoutText);
+      docxDownloadButton.addEventListener("click", downloadDocxDocument);
       modeEl.addEventListener("change", reprocessPages);
 
       window.addEventListener("beforeinstallprompt", (event) => {
