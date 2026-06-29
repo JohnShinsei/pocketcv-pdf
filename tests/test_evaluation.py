@@ -55,6 +55,34 @@ class EvaluationTest(unittest.TestCase):
         self.assertGreater(metrics["character_error_rate"], 0)
         self.assertGreater(metrics["low_confidence_ratio"], 0)
 
+    def test_evaluate_ocr_result_reports_word_textline_geometry(self) -> None:
+        result = OcrResult(
+            engine="fake",
+            language="eng",
+            text="Tilted word boxes",
+            confidence=90.0,
+            width=500,
+            height=400,
+            lines=[
+                OcrLine(
+                    "Tilted word boxes",
+                    90.0,
+                    (30, 50, 250, 56),
+                    [
+                        OcrWord("Tilted", 90.0, (30, 48, 70, 22)),
+                        OcrWord("word", 90.0, (130, 62, 58, 22)),
+                        OcrWord("boxes", 90.0, (220, 74, 66, 22)),
+                    ],
+                )
+            ],
+        )
+
+        metrics = evaluate_ocr_result(result)
+
+        self.assertEqual(metrics["ocr_textline_sample_count"], 1)
+        self.assertGreater(metrics["ocr_textline_mean_abs_angle"], 5.0)
+        self.assertLess(metrics["ocr_textline_horizontal_score"], 0.4)
+
     def test_evaluate_readability_includes_textline_score(self) -> None:
         metrics = evaluate_readability(make_text_page())
 
@@ -80,6 +108,8 @@ class EvaluationTest(unittest.TestCase):
                     "character_count": 24,
                     "mean_confidence": 42.0,
                     "low_confidence_ratio": 0.67,
+                    "ocr_textline_sample_count": 1,
+                    "ocr_textline_horizontal_score": 0.44,
                     "character_error_rate": 0.31,
                 },
             },
@@ -88,6 +118,7 @@ class EvaluationTest(unittest.TestCase):
         issue_codes = {issue["code"] for issue in diagnostics["issues"]}  # type: ignore[index]
         self.assertIn("ocr_low_confidence", issue_codes)
         self.assertIn("ocr_high_cer", issue_codes)
+        self.assertIn("ocr_textline_tilt", issue_codes)
         self.assertEqual(diagnostics["status"], "review")
 
     def test_quality_diagnostics_flags_strong_page_curvature(self) -> None:

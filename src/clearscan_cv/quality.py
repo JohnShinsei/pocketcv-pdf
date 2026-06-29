@@ -220,6 +220,8 @@ def diagnose_scan_quality(
         ocr_character_count = _nested_metric_float(readability, ("ocr_quality", "character_count"))
         mean_confidence = _nested_metric_float(readability, ("ocr_quality", "mean_confidence"), 100.0)
         low_confidence_ratio = _nested_metric_float(readability, ("ocr_quality", "low_confidence_ratio"))
+        ocr_textline_sample_count = _nested_metric_float(readability, ("ocr_quality", "ocr_textline_sample_count"))
+        ocr_textline_horizontal_score = _nested_metric_float(readability, ("ocr_quality", "ocr_textline_horizontal_score"), 1.0)
         if ocr_line_count <= 0 or ocr_character_count <= 0:
             add_issue(
                 "ocr_empty",
@@ -240,6 +242,13 @@ def diagnose_scan_quality(
                 "medium",
                 "OCR confidence should be reviewed.",
                 "Review low-confidence lines before using the recovered document.",
+            )
+        if ocr_textline_sample_count > 0 and ocr_textline_horizontal_score < 0.62:
+            add_issue(
+                "ocr_textline_tilt",
+                "medium",
+                "OCR word boxes suggest text lines are still tilted.",
+                "Review the corner overlay, disable curved-page dewarp for flat pages, or retake from directly above.",
             )
         if _nested_metric_exists(readability, ("ocr_quality", "character_error_rate")):
             character_error_rate = _nested_metric_float(readability, ("ocr_quality", "character_error_rate"))

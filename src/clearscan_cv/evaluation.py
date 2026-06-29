@@ -5,7 +5,7 @@ import unicodedata
 
 import numpy as np
 
-from .ocr import OcrResult
+from .ocr import OcrResult, OcrWord
 from .pipeline import estimate_textline_skew
 
 
@@ -75,10 +75,47 @@ def _ocr_coverage_ratio(result: OcrResult) -> float:
     return round(min(1.0, line_area / page_area), 4)
 
 
+def _ocr_word_center_angle(words: list[OcrWord]) -> float | None:
+    if len(words) < 2:
+        return None
+    centers: list[tuple[float, float]] = []
+    heights: list[int] = []
+    for word in words:
+        x, y, width, height = word.bbox
+        if width <= 0 or height <= 0:
+            continue
+        centers.append((x + width / 2.0, y + height / 2.0))
+        heights.append(height)
+    if len(centers) < 2:
+        return None
+
+    points = np.asarray(centers, dtype=np.float32)
+    x_span = float(np.max(points[:, 0]) - np.min(points[:, 0]))
+    median_height = float(np.median(heights)) if heights else 1.0
+    if x_span < max(20.0, median_height * 2.0):
+        return None
+
+    slope, _intercept = np.polyfit(points[:, 0], points[:, 1], 1)
+    angle = float(np.degrees(np.arctan(float(slope))))
+    if abs(angle) > 35.0:
+        return None
+    return abs(angle)
+
+
+def _ocr_textline_angles(result: OcrResult) -> list[float]:
+    angles: list[float] = []
+    for line in result.lines:
+        angle = _ocr_word_center_angle(line.words)
+        if angle is not None:
+            angles.append(angle)
+    return angles
+
+
 def evaluate_ocr_result(result: OcrResult, expected_text: str | None = None) -> dict[str, object]:
     text = result.text or "\n".join(line.text for line in result.lines)
     confidences = _confidence_values(result)
     low_confidence_ratio = float(np.mean([value < 60.0 for value in confidences])) if confidences else None
+    textline_angles = _ocr_textline_angles(result)
     metrics: dict[str, object] = {
         "engine": result.engine,
         "language": result.language,
@@ -89,6 +126,12 @@ def evaluate_ocr_result(result: OcrResult, expected_text: str | None = None) -> 
         "min_confidence": round(float(np.min(confidences)), 2) if confidences else None,
         "low_confidence_ratio": round(low_confidence_ratio, 4) if low_confidence_ratio is not None else None,
         "ocr_coverage_ratio": _ocr_coverage_ratio(result),
+        "ocr_textline_sample_count": len(textline_angles),
+        "ocr_textline_mean_abs_angle": round(float(np.mean(textline_angles)), 3) if textline_angles else None,
+        "ocr_textline_max_abs_angle": round(float(np.max(textline_angles)), 3) if textline_angles else None,
+        "ocr_textline_horizontal_score": round(max(0.0, 1.0 - min(float(np.mean(textline_angles)), 8.0) / 8.0), 4)
+        if textline_angles
+        else None,
     }
     if expected_text is not None:
         metrics["edit_distance"] = edit_distance(expected_text, text)
