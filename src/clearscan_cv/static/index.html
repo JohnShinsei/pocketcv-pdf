@@ -1106,6 +1106,13 @@
         return `傾き ${Math.round(angle * 10) / 10}°`;
       }
 
+      function formatDewarpOffset(metrics) {
+        if (!metrics || !metrics.dewarpApplied) {
+          return "カーブ補正なし";
+        }
+        return `カーブ補正 ${Math.round((metrics.dewarpMaxOffset || 0) * 10) / 10}px`;
+      }
+
       function formatResolution(page) {
         const current = `${page.sourceCanvas.width}×${page.sourceCanvas.height}`;
         if (
@@ -1245,7 +1252,7 @@
                 page.metrics.perspectiveConfidence * 100
               )}% · エッジ ${
                 Math.round(page.metrics.edgeDensity * 1000) / 10
-              }% · ${formatSkewAngle(page.metrics.deskewAngle)} · ${advice.label} · ${formatResolution(page)}`
+              }% · ${formatDewarpOffset(page.metrics)} · ${formatSkewAngle(page.metrics.deskewAngle)} · ${advice.label} · ${formatResolution(page)}`
             : "端末内で処理済み";
 
           item.append(image, footer, meta);
@@ -1358,7 +1365,8 @@
         }
 
         const corrected = perspectiveCorrectCanvas(page.sourceCanvas, page.manualCorners);
-        const deskewed = deskewCanvasByTextLines(corrected.canvas, corrected.detection);
+        const dewarped = dewarpCanvasByTextlineColumns(corrected.canvas, corrected.detection);
+        const deskewed = deskewCanvasByTextLines(dewarped.canvas, dewarped.detection);
         page.ocrCanvas = enhanceCanvas(deskewed.canvas, "gray", deskewed.detection).canvas;
         return page.ocrCanvas;
       }
@@ -2943,6 +2951,261 @@
         };
       }
 
+      function normalizeTextlineProjection(projection) {
+        const weights = [1, 2, 3, 4, 5, 4, 3, 2, 1];
+        const radius = Math.floor(weights.length / 2);
+        const smoothed = new Float32Array(projection.length);
+        let sum = 0;
+        for (let y = 0; y < projection.length; y += 1) {
+          let weighted = 0;
+          let weightSum = 0;
+          for (let offset = -radius; offset <= radius; offset += 1) {
+            const index = clamp(y + offset, 0, projection.length - 1);
+            const weight = weights[offset + radius];
+            weighted += projection[index] * weight;
+            weightSum += weight;
+          }
+          smoothed[y] = weighted / Math.max(1, weightSum);
+          sum += smoothed[y];
+        }
+
+        const mean = sum / Math.max(1, smoothed.length);
+        let norm = 0;
+        for (let y = 0; y < smoothed.length; y += 1) {
+          smoothed[y] -= mean;
+          norm += smoothed[y] * smoothed[y];
+        }
+        norm = Math.sqrt(norm);
+        if (norm <= 1e-6) {
+          return smoothed;
+        }
+        for (let y = 0; y < smoothed.length; y += 1) {
+          smoothed[y] /= norm;
+        }
+        return smoothed;
+      }
+
+      function bestVerticalProjectionShift(reference, projection, maxShift) {
+        let bestShift = 0;
+        let bestScore = -1;
+        for (let shift = -maxShift; shift <= maxShift; shift += 1) {
+          let referenceStart = 0;
+          let projectionStart = 0;
+          let length = reference.length;
+          if (shift < 0) {
+            length = reference.length + shift;
+            projectionStart = -shift;
+          } else if (shift > 0) {
+            referenceStart = shift;
+            length = reference.length - shift;
+          }
+          if (length < 24) {
+            continue;
+          }
+
+          let score = 0;
+          for (let index = 0; index < length; index += 1) {
+            score += reference[referenceStart + index] * projection[projectionStart + index];
+          }
+          if (score > bestScore) {
+            bestScore = score;
+            bestShift = shift;
+          }
+        }
+        return { shift: bestShift, score: bestScore };
+      }
+
+      function smoothOffsetSeries(offsets) {
+        if (offsets.length < 3) {
+          return offsets;
+        }
+        const output = offsets.slice();
+        for (let index = 0; index < offsets.length; index += 1) {
+          const left = offsets[Math.max(0, index - 1)];
+          const center = offsets[index];
+          const right = offsets[Math.min(offsets.length - 1, index + 1)];
+          output[index] = (left + center * 2 + right) / 4;
+        }
+        return output;
+      }
+
+      function estimateTextlineColumnOffsetsCanvas(sourceCanvas, stripCount = 31, maxShiftRatio = 0.045) {
+        const { width, height } = sourceCanvas;
+        if (Math.min(width, height) < 120) {
+          return { centers: [], shifts: [], confidence: 0, reason: "small_canvas" };
+        }
+
+        const scale = Math.min(1, 900 / Math.max(width, height));
+        const analysisCanvas = document.createElement("canvas");
+        analysisCanvas.width = Math.max(1, Math.round(width * scale));
+        analysisCanvas.height = Math.max(1, Math.round(height * scale));
+        const analysisContext = analysisCanvas.getContext("2d", { willReadFrequently: true });
+        analysisContext.imageSmoothingEnabled = true;
+        analysisContext.imageSmoothingQuality = "high";
+        analysisContext.drawImage(sourceCanvas, 0, 0, analysisCanvas.width, analysisCanvas.height);
+
+        const image = analysisContext.getImageData(0, 0, analysisCanvas.width, analysisCanvas.height);
+        const data = image.data;
+        const pixelCount = analysisCanvas.width * analysisCanvas.height;
+        const lum = new Uint8ClampedArray(pixelCount);
+        const histogram = new Array(256).fill(0);
+        for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+          const offset = pixel * 4;
+          const value = Math.round(luminance(data[offset], data[offset + 1], data[offset + 2]));
+          lum[pixel] = value;
+          histogram[value] += 1;
+        }
+
+        const threshold = clamp(
+          Math.min(otsuThreshold(histogram, pixelCount), percentileFromHistogram(histogram, pixelCount, 0.35)) - 2,
+          35,
+          185
+        );
+        const darkMask = new Uint8Array(pixelCount);
+        let darkCount = 0;
+        for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+          if (lum[pixel] <= threshold) {
+            darkMask[pixel] = 1;
+            darkCount += 1;
+          }
+        }
+        if (darkCount / Math.max(1, pixelCount) < 0.004) {
+          return { centers: [], shifts: [], confidence: 0, threshold, reason: "insufficient_text" };
+        }
+
+        const smallWidth = analysisCanvas.width;
+        const smallHeight = analysisCanvas.height;
+        const strips = Math.max(9, Math.min(stripCount, smallWidth >= 160 ? Math.floor(smallWidth / 16) : 9));
+        const centers = [];
+        const projections = [];
+        for (let strip = 0; strip < strips; strip += 1) {
+          const x0 = Math.round((strip * smallWidth) / strips);
+          const x1 = Math.round(((strip + 1) * smallWidth) / strips);
+          if (x1 <= x0 + 2) {
+            continue;
+          }
+
+          const projection = new Float32Array(smallHeight);
+          let maxProjection = 0;
+          for (let y = 0; y < smallHeight; y += 1) {
+            let rowCount = 0;
+            const row = y * smallWidth;
+            for (let x = x0; x < x1; x += 1) {
+              rowCount += darkMask[row + x];
+            }
+            projection[y] = rowCount;
+            maxProjection = Math.max(maxProjection, rowCount);
+          }
+
+          if (maxProjection < Math.max(2, (x1 - x0) * 0.05)) {
+            continue;
+          }
+          centers.push(((x0 + x1) / 2) / scale);
+          projections.push(normalizeTextlineProjection(projection));
+        }
+
+        if (projections.length < 7) {
+          return { centers: [], shifts: [], confidence: 0, threshold, reason: "insufficient_strips" };
+        }
+
+        const reference = projections[Math.floor(projections.length / 2)];
+        const maxShift = Math.max(2, Math.round(smallHeight * maxShiftRatio));
+        let confidenceSum = 0;
+        const shifts = projections.map((projection) => {
+          const match = bestVerticalProjectionShift(reference, projection, maxShift);
+          confidenceSum += Math.max(0, match.score);
+          return match.shift / scale;
+        });
+        const smoothedShifts = smoothOffsetSeries(shifts);
+        return {
+          centers,
+          shifts: smoothedShifts,
+          confidence: clamp(confidenceSum / Math.max(1, projections.length), 0, 1),
+          threshold,
+          reason: "ok",
+        };
+      }
+
+      function interpolateOffsetAt(x, xPoints, offsets, cursor) {
+        while (cursor.index < xPoints.length - 2 && x > xPoints[cursor.index + 1]) {
+          cursor.index += 1;
+        }
+        const leftX = xPoints[cursor.index];
+        const rightX = xPoints[cursor.index + 1];
+        const ratio = rightX <= leftX ? 0 : (x - leftX) / (rightX - leftX);
+        return offsets[cursor.index] + (offsets[cursor.index + 1] - offsets[cursor.index]) * ratio;
+      }
+
+      function dewarpCanvasByTextlineColumns(sourceCanvas, detection) {
+        const estimate = estimateTextlineColumnOffsetsCanvas(sourceCanvas);
+        if (estimate.centers.length < 7 || estimate.shifts.length < 7) {
+          return {
+            canvas: sourceCanvas,
+            detection: { ...detection, dewarpApplied: false, dewarpConfidence: estimate.confidence, dewarpReason: estimate.reason },
+          };
+        }
+
+        const maxOffset = estimate.shifts.reduce((max, value) => Math.max(max, Math.abs(value)), 0);
+        let maxAdjacentDelta = 0;
+        for (let index = 1; index < estimate.shifts.length; index += 1) {
+          maxAdjacentDelta = Math.max(maxAdjacentDelta, Math.abs(estimate.shifts[index] - estimate.shifts[index - 1]));
+        }
+
+        if (estimate.confidence < 0.42 || maxOffset < Math.max(6, sourceCanvas.height * 0.006)) {
+          return {
+            canvas: sourceCanvas,
+            detection: {
+              ...detection,
+              dewarpApplied: false,
+              dewarpConfidence: Math.round(estimate.confidence * 1000) / 1000,
+              dewarpMaxOffset: Math.round(maxOffset * 100) / 100,
+              dewarpReason: "flat_or_low_confidence",
+            },
+          };
+        }
+        if (maxOffset > sourceCanvas.height * 0.07 || (maxAdjacentDelta > Math.max(18, sourceCanvas.height * 0.026) && estimate.confidence < 0.65)) {
+          return {
+            canvas: sourceCanvas,
+            detection: {
+              ...detection,
+              dewarpApplied: false,
+              dewarpConfidence: Math.round(estimate.confidence * 1000) / 1000,
+              dewarpMaxOffset: Math.round(maxOffset * 100) / 100,
+              dewarpReason: "unstable_offsets",
+            },
+          };
+        }
+
+        const output = document.createElement("canvas");
+        output.width = sourceCanvas.width;
+        output.height = sourceCanvas.height;
+        const context = output.getContext("2d");
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, output.width, output.height);
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
+
+        const xPoints = [0, ...estimate.centers, sourceCanvas.width - 1];
+        const offsets = [estimate.shifts[0], ...estimate.shifts, estimate.shifts[estimate.shifts.length - 1]];
+        const cursor = { index: 0 };
+        for (let x = 0; x < sourceCanvas.width; x += 1) {
+          const shift = interpolateOffsetAt(x, xPoints, offsets, cursor);
+          context.drawImage(sourceCanvas, x, 0, 1, sourceCanvas.height, x, shift, 1, sourceCanvas.height);
+        }
+
+        return {
+          canvas: output,
+          detection: {
+            ...detection,
+            dewarpApplied: true,
+            dewarpConfidence: Math.round(estimate.confidence * 1000) / 1000,
+            dewarpMaxOffset: Math.round(maxOffset * 100) / 100,
+            dewarpStripCount: estimate.centers.length,
+            dewarpReason: "textline_column_offsets",
+          },
+        };
+      }
+
       function perspectiveCorrectCanvas(sourceCanvas, manualCorners = null) {
         const detection = detectDocumentQuad(sourceCanvas);
         const selectedCorners = manualCorners || (detection.found ? detection.corners : null);
@@ -3827,6 +4090,11 @@
             threshold,
             deskewAngle: detection.deskewAngle || 0,
             deskewConfidence: detection.deskewConfidence || 0,
+            dewarpApplied: Boolean(detection.dewarpApplied),
+            dewarpConfidence: detection.dewarpConfidence || 0,
+            dewarpMaxOffset: detection.dewarpMaxOffset || 0,
+            dewarpStripCount: detection.dewarpStripCount || 0,
+            dewarpReason: detection.dewarpReason || "",
             backgroundRange,
             useFrequencyDeshadow,
             useGatosSauvola,
@@ -3904,6 +4172,11 @@
             threshold: "-",
             deskewAngle: 0,
             deskewConfidence: 0,
+            dewarpApplied: false,
+            dewarpConfidence: 0,
+            dewarpMaxOffset: 0,
+            dewarpStripCount: 0,
+            dewarpReason: "color_geometry_only",
             backgroundRange: 0,
             useFrequencyDeshadow: false,
             useGatosSauvola: false,
@@ -3973,6 +4246,7 @@
           ["推奨操作", advice.action],
           ["自動選択", metrics.autoSelection ? `${metrics.autoSelection.selectedMode}` : `${metrics.selectedMode || "-"}`],
           ["透視補正信頼度", `${Math.round(metrics.perspectiveConfidence * 100)}%`],
+          ["文字行カーブ補正", metrics.dewarpApplied ? `${Math.round((metrics.dewarpMaxOffset || 0) * 10) / 10}px` : "未適用"],
           ["文字行傾き補正", `${Math.round((metrics.deskewAngle || 0) * 10) / 10}°`],
           ["影ムラ残り", `${Math.round((metrics.shadowResidual || 0) * 10) / 10}`],
           ["文字の墨量", `${Math.round((metrics.inkDensity || 0) * 1000) / 10}%`],
@@ -3986,9 +4260,9 @@
 
         context.font = "700 21px 'Yu Gothic', 'Noto Sans JP', Arial, sans-serif";
         rows.forEach((row, index) => {
-          const y = 872 + index * 43;
+          const y = 872 + index * 39;
           context.fillStyle = index % 2 === 0 ? "#f6f8fb" : "#ffffff";
-          context.fillRect(626, y - 27, 510, 35);
+          context.fillRect(626, y - 24, 510, 32);
           context.fillStyle = "#687386";
           context.fillText(row[0], 648, y);
           context.fillStyle = "#157f72";
@@ -4012,7 +4286,8 @@
           renderMode === "color"
             ? buildColorGeometryResult(corrected.canvas, corrected.detection)
             : (() => {
-                const deskewed = deskewCanvasByTextLines(corrected.canvas, corrected.detection);
+                const dewarped = dewarpCanvasByTextlineColumns(corrected.canvas, corrected.detection);
+                const deskewed = deskewCanvasByTextLines(dewarped.canvas, dewarped.detection);
                 return enhanceCanvas(deskewed.canvas, renderMode, deskewed.detection);
               })();
         const processedCanvas =
