@@ -90,6 +90,26 @@ class EvaluationTest(unittest.TestCase):
         self.assertIn("ocr_high_cer", issue_codes)
         self.assertEqual(diagnostics["status"], "review")
 
+    def test_quality_diagnostics_flags_strong_page_curvature(self) -> None:
+        diagnostics = diagnose_scan_quality(
+            {
+                "score": 83.0,
+                "height": 1920,
+                "shadow_residual": 2.0,
+                "shadow_score": 1.0,
+                "ink_density": 0.06,
+                "edge_density": 0.09,
+                "boldness_risk": 0.0,
+            },
+            perspective_confidence=0.9,
+            dewarp_report={"applied": True, "max_offset": 82.0, "confidence": 0.45},
+            readability={"textline_horizontal_score": 1.0},
+        )
+
+        issue_codes = {issue["code"] for issue in diagnostics["issues"]}  # type: ignore[index]
+        self.assertIn("nonplanar_page_review", issue_codes)
+        self.assertEqual(diagnostics["status"], "review")
+
     def test_cli_readability_report_without_ocr_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

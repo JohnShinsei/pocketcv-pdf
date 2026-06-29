@@ -83,9 +83,11 @@ def _perspective_confidence(report: dict[str, object]) -> float:
 def _refresh_quality_diagnostics(report: dict[str, object], readability: dict[str, object]) -> None:
     output_quality = report.get("output_quality")
     if isinstance(output_quality, dict):
+        dewarp_report = report.get("dewarp")
         report["quality_diagnostics"] = diagnose_scan_quality(
             output_quality,
             perspective_confidence=_perspective_confidence(report),
+            dewarp_report=dewarp_report if isinstance(dewarp_report, dict) else None,
             readability=readability,
         )
 

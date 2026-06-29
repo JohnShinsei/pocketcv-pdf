@@ -122,6 +122,7 @@ def diagnose_scan_quality(
     metrics: dict[str, object],
     *,
     perspective_confidence: float | None = None,
+    dewarp_report: dict[str, object] | None = None,
     readability: dict[str, object] | None = None,
 ) -> dict[str, object]:
     score = _metric_float(metrics, "score")
@@ -187,6 +188,25 @@ def diagnose_scan_quality(
             "Very little text ink was detected.",
             "Use grayscale mode or retake with sharper focus.",
         )
+
+    if dewarp_report is not None and bool(dewarp_report.get("applied")):
+        max_offset = _metric_float(dewarp_report, "max_offset")
+        height = max(1.0, _metric_float(metrics, "height", 1.0))
+        offset_ratio = max_offset / height
+        if max_offset > 110.0 or (max_offset > 80.0 and offset_ratio > 0.065):
+            add_issue(
+                "nonplanar_page",
+                "high",
+                "Document curvature is too strong for the lightweight dewarp stage.",
+                "Flatten the page, adjust the four corners, or use an external DocScanner/DocTr-style restorer.",
+            )
+        elif max_offset > 56.0 or (max_offset > 40.0 and offset_ratio > 0.032):
+            add_issue(
+                "nonplanar_page_review",
+                "medium",
+                "Strong page curvature remains after lightweight dewarp.",
+                "Review the page before OCR/export, or retake with the sheet flatter.",
+            )
 
     if readability is not None and _metric_float(readability, "textline_horizontal_score", 1.0) < 0.68:
         add_issue(

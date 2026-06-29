@@ -653,6 +653,7 @@ def enhance_image(
             "quality_diagnostics": diagnose_scan_quality(
                 output_quality,
                 perspective_confidence=float(detection.confidence) if detection.found else 0.0,
+                dewarp_report=color_stage_report,
             ),
             "pipeline": [
                 _external_detector_pipeline_stage(external_detector_report, external_detector_command),
@@ -715,6 +716,7 @@ def enhance_image(
         "quality_diagnostics": diagnose_scan_quality(
             output_quality,
             perspective_confidence=float(detection.confidence) if detection.found else 0.0,
+            dewarp_report=dewarp_result.report if dewarp_result is not None else None,
         ),
         "pipeline": [
             _external_detector_pipeline_stage(external_detector_report, external_detector_command),
