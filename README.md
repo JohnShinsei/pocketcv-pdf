@@ -256,6 +256,17 @@ clearscan-dataset --annotations annotations.jsonl --image-root . --out datasets/
 
 出力される `manifest.jsonl` には、学習画像、二値 mask、ピクセル座標の四隅、0-1 正規化四隅、train / val split が含まれます。第一段階の学習対象は、スマートフォン写真から文書 mask と四隅を予測する軽量 detector です。予測結果は既存の OpenCV Homography、去陰影、PDF/OCR パイプラインに接続できます。
 
+軽量な文書 mask detector を学習して、既存の透視補正パイプラインに接続する場合:
+
+```bash
+pip install -e .[train]
+clearscan-docnet train --dataset datasets/docnet --out models/docnet.pt --epochs 20 --image-size 256
+clearscan-docnet predict --checkpoint models/docnet.pt --input photos/page_001.jpg --output outputs/page_001_corners.json
+clearscan photos/page_001.jpg --out outputs/model_scan --mode gray --external-detector-command "clearscan-docnet predict --checkpoint models/docnet.pt --input {input} --output {output}"
+```
+
+このモデルは最初から画像全体を復元するのではなく、文書領域の mask と四隅を安定して推定する役割に限定しています。透視変換、影除去、文字強調、PDF/OCR 出力は従来の OpenCV パイプラインで行うため、失敗時は自動検出や手動四隅調整に戻せます。
+
 出力:
 
 - `*_clearscan.png`: 処理後画像
@@ -321,6 +332,7 @@ src/clearscan_cv/
   dewarp.py       文字行投影に基づく軽量 dewarp
   geometry.py     OpenCV による輪郭検出と透視変換
   model_hooks.py  外部 detector / 文書復元モデルを接続する fallback-safe hook
+  docnet.py       任意 PyTorch による軽量文書 mask detector の学習 / 推論 CLI
   training_data.py 手動四隅 / report から学習用 mask と corner manifest を生成
   pipeline.py     画像処理パイプライン
   quality.py      画像品質指標の計算

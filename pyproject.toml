@@ -32,6 +32,9 @@ rapidocr = [
 paddleocr = [
   "paddleocr>=2.8"
 ]
+train = [
+  "torch>=2.2"
+]
 dev = [
   "httpx>=0.27",
   "pytest>=8.0"
@@ -43,6 +46,7 @@ desktop = [
 [project.scripts]
 clearscan = "clearscan_cv.cli:main"
 clearscan-dataset = "clearscan_cv.training_data:main"
+clearscan-docnet = "clearscan_cv.docnet:main"
 pocketcv-local = "clearscan_cv.local_app:main"
 
 [tool.setuptools.packages.find]
