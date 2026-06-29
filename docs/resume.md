@@ -10,6 +10,7 @@ PocketCV PDF is a privacy-first mobile document scanner that captures or imports
 - Built an image processing pipeline with OpenCV for document boundary detection, perspective correction, textline deskew, illumination normalization, stroke-aware binarization, and before/after quality scoring.
 - Added a lightweight textline-projection dewarping stage that estimates per-column vertical offsets and remaps mildly curved document photos before OCR.
 - Designed a public GitHub-ready project with a Python package, CLI, optional FastAPI dev server, synthetic image tests, and reproducible sample generation.
+- Added a one-command demo runner that produces a processed scan image, comparison image, PDF, OCR backend diagnostics, readability metrics, and a consolidated JSON report for portfolio review.
 - Implemented quality metrics such as Laplacian sharpness, contrast, edge density, exposure balance, and score deltas to make image enhancement measurable.
 - Added browser-side Tesseract.js OCR over the enhanced scan output with copy and TXT export, structured as the second stage before document layout recovery.
 - Implemented Python-side optional OCR adapters for RapidOCR, Tesseract, and PaddleOCR, normalizing output into line/word bounding boxes and confidence scores.

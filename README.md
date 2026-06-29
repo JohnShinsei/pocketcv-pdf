@@ -76,6 +76,20 @@ uvicorn clearscan_cv.api:app --reload
 
 Python/OpenCV 版の処理パイプラインも含まれています。
 
+端から端までのデモ出力を一括生成する場合:
+
+```bash
+python scripts/run_demo_pipeline.py examples/generated/sample_document.jpg --out outputs/demo --mode binary
+```
+
+このコマンドは、処理後スキャン画像、処理前後の比較画像、画像 PDF、品質レポート、OCR バックエンド診断、読みやすさ指標をまとめて `demo_summary.json` に保存します。RapidOCR / Tesseract / PaddleOCR のいずれかが利用可能な環境では、OCR テキスト、復元 Markdown、DOCX、searchable PDF も同時に生成します。
+
+OCR なしで画像処理デモだけを確認する場合:
+
+```bash
+python scripts/run_demo_pipeline.py C:\path\to\photo.jpg --out outputs/demo --mode binary --no-ocr
+```
+
 ```bash
 clearscan examples/generated/sample_document.jpg --out outputs --mode color --compare
 ```
@@ -141,8 +155,10 @@ src/clearscan_cv/
     sw.js         PWA 用 Service Worker
 tests/
   test_pipeline.py
+  test_demo_pipeline.py
 scripts/
   generate_sample.py
+  run_demo_pipeline.py
 docs/
   resume.md
 ```
