@@ -6,6 +6,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Bundle;
+import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.text.InputType;
 import android.util.Base64;
@@ -22,10 +23,13 @@ import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 
+import androidx.core.content.FileProvider;
+
 import org.json.JSONObject;
 import org.opencv.android.OpenCVLoader;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -38,6 +42,7 @@ public class MainActivity extends Activity {
     private static final int REQ_SAVE_IMAGE = 1002;
     private static final int REQ_SAVE_PDF = 1003;
     private static final int REQ_SAVE_DOCX = 1004;
+    private static final int REQ_CAPTURE_IMAGE = 1005;
 
     private EditText endpointInput;
     private Spinner modeSpinner;
@@ -49,6 +54,7 @@ public class MainActivity extends Activity {
     private TextView reportText;
     private ImageView previewImage;
     private Button healthButton;
+    private Button cameraButton;
     private Button onDeviceProcessButton;
     private Button processButton;
     private Button saveImageButton;
@@ -59,7 +65,9 @@ public class MainActivity extends Activity {
     private boolean busy;
 
     private Uri selectedImageUri;
+    private Uri pendingCameraUri;
     private String selectedImageName = "scan.jpg";
+    private String pendingCameraName = "capture.jpg";
     private byte[] latestImageBytes;
     private byte[] latestPdfBytes;
     private byte[] latestDocxBytes;
@@ -127,6 +135,11 @@ public class MainActivity extends Activity {
                 ocrCheck.setChecked(true);
             }
         });
+
+        cameraButton = new Button(this);
+        cameraButton.setText("カメラで撮影");
+        cameraButton.setOnClickListener(v -> captureImage());
+        root.addView(cameraButton, matchWidth());
 
         Button pickButton = new Button(this);
         pickButton.setText("画像を選択");
@@ -235,6 +248,28 @@ public class MainActivity extends Activity {
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("image/*");
         startActivityForResult(intent, REQ_PICK_IMAGE);
+    }
+
+    private void captureImage() {
+        Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        if (intent.resolveActivity(getPackageManager()) == null) {
+            setStatus("カメラアプリが見つかりません。");
+            return;
+        }
+        try {
+            pendingCameraName = "pocketcv-capture-" + System.currentTimeMillis() + ".jpg";
+            File photoFile = new File(getCacheDir(), pendingCameraName);
+            pendingCameraUri = FileProvider.getUriForFile(
+                    this,
+                    getPackageName() + ".fileprovider",
+                    photoFile
+            );
+            intent.putExtra(MediaStore.EXTRA_OUTPUT, pendingCameraUri);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            startActivityForResult(intent, REQ_CAPTURE_IMAGE);
+        } catch (Exception error) {
+            setStatus("カメラ起動失敗: " + error.getMessage());
+        }
     }
 
     private void processImage() {
@@ -513,21 +548,18 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_CAPTURE_IMAGE) {
+            if (resultCode == RESULT_OK && pendingCameraUri != null) {
+                setSelectedImage(pendingCameraUri, pendingCameraName);
+            }
+            return;
+        }
         if (resultCode != RESULT_OK || data == null || data.getData() == null) {
             return;
         }
         Uri uri = data.getData();
         if (requestCode == REQ_PICK_IMAGE) {
-            selectedImageUri = uri;
-            selectedImageName = displayName(uri);
-            try {
-                Bitmap bitmap = BitmapFactory.decodeStream(getContentResolver().openInputStream(uri));
-                previewImage.setImageBitmap(bitmap);
-                setStatus("選択済み: " + selectedImageName);
-                updateSaveButtons();
-            } catch (Exception error) {
-                setStatus("画像を開けません: " + error.getMessage());
-            }
+            setSelectedImage(uri, displayName(uri));
             return;
         }
 
@@ -540,6 +572,23 @@ public class MainActivity extends Activity {
             setStatus("保存しました");
         } catch (Exception error) {
             setStatus("保存失敗: " + error.getMessage());
+        }
+    }
+
+    private void setSelectedImage(Uri uri, String name) {
+        selectedImageUri = uri;
+        selectedImageName = name;
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            Bitmap bitmap = BitmapFactory.decodeStream(in);
+            previewImage.setImageBitmap(bitmap);
+            latestImageBytes = null;
+            latestPdfBytes = null;
+            latestDocxBytes = null;
+            reportText.setText("");
+            setStatus("選択済み: " + selectedImageName);
+            updateSaveButtons();
+        } catch (Exception error) {
+            setStatus("画像を開けません: " + error.getMessage());
         }
     }
 }

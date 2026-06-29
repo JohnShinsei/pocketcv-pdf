@@ -16,6 +16,9 @@ class AndroidPackagingTest(unittest.TestCase):
         self.assertIn("OpenCVLoader.initLocal", source)
         self.assertIn("端末内OpenCVでスキャン", source)
         self.assertIn("OnDeviceScanner.process", source)
+        self.assertIn("カメラで撮影", source)
+        self.assertIn("MediaStore.ACTION_IMAGE_CAPTURE", source)
+        self.assertIn("FileProvider.getUriForFile", source)
         self.assertIn("API確認", source)
         self.assertIn('normalizedEndpoint() + "/api/health"', source)
         self.assertIn('normalizedEndpoint() + "/api/process"', source)
@@ -33,6 +36,14 @@ class AndroidPackagingTest(unittest.TestCase):
         self.assertIn("Imgproc.warpPerspective", scanner)
         self.assertIn("Imgproc.adaptiveThreshold", scanner)
         self.assertIn("PdfDocument", scanner)
+        manifest = (ROOT / "android" / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
+        file_paths = (ROOT / "android" / "app" / "src" / "main" / "res" / "xml" / "file_paths.xml").read_text(encoding="utf-8")
+        gradle_props = (ROOT / "android" / "gradle.properties").read_text(encoding="utf-8")
+
+        self.assertIn("androidx.core.content.FileProvider", manifest)
+        self.assertIn("android.hardware.camera.any", manifest)
+        self.assertIn("cache-path", file_paths)
+        self.assertIn("android.useAndroidX=true", gradle_props)
 
     def test_android_workflow_uploads_debug_apk(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "android.yml").read_text(encoding="utf-8")
@@ -68,6 +79,7 @@ class AndroidPackagingTest(unittest.TestCase):
         self.assertIn("PocketCV_API35", emulator_qa_script)
         self.assertIn("uiautomator dump", emulator_qa_script)
         self.assertIn("pocketcv-sample.jpg", emulator_qa_script)
+        self.assertIn("カメラで撮影", emulator_qa_script)
         self.assertIn("端末内OpenCVでスキャン", emulator_qa_script)
         self.assertIn("PC後端でスキャン生成", emulator_qa_script)
 

@@ -100,7 +100,7 @@ Android アプリ側の Backend URL:
 - Android Emulator: `http://10.0.2.2:8765`
 - 実機: `http://<PCのLAN IP>:8765` 例 `http://192.168.1.20:8765`
 
-Android APK は GitHub Actions の `Android APK` workflow で `pocketcv-android-debug-apk` artifact として生成します。アプリは WebView ではなく原生 Android クライアントです。`端末内OpenCVでスキャン` は APK に同梱した OpenCV Android で、画像選択、四隅検出、Homography 透視補正、照明正規化、グレー / 白黒スキャン、PNG / PDF 保存を端末内で実行します。
+Android APK は GitHub Actions の `Android APK` workflow で `pocketcv-android-debug-apk` artifact として生成します。アプリは WebView ではなく原生 Android クライアントです。`カメラで撮影` は Android のカメラアプリを開き、FileProvider 経由で高解像度 JPEG を受け取ります。`画像を選択` では既存画像を読み込みます。`端末内OpenCVでスキャン` は APK に同梱した OpenCV Android で、撮影または選択した画像の四隅検出、Homography 透視補正、照明正規化、グレー / 白黒スキャン、PNG / PDF 保存を端末内で実行します。
 
 より重い Python/OpenCV パイプライン、OCR、DOCX、searchable PDF を試す場合は、`PC後端でスキャン生成` を使います。この場合は選択した画像をローカル FastAPI 後端に送り、返ってきた PNG / PDF / DOCX を保存できます。アプリ起動後は先に `API確認` を押し、後端に接続できることを確認してから画像を選択します。
 

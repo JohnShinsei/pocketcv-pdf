@@ -222,6 +222,7 @@ if ($LASTEXITCODE -ne 0) {
 Start-Sleep -Seconds 2
 
 $mainUi = Dump-Ui "ui-main.xml"
+Find-NodeCenter -UiPath $mainUi -Text "カメラで撮影" | Out-Null
 Tap-UiNode -UiPath $mainUi -Text "API確認"
 $healthUi = Wait-UiContains "API OK" 30 "ui-after-health.xml"
 Write-Host "Android app reached API OK."
