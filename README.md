@@ -176,6 +176,17 @@ curl -X POST http://127.0.0.1:8000/api/process ^
   -F "readability=true"
 ```
 
+複数ファイルをまとめて処理し、多ページ PDF を返す場合:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/process-batch ^
+  -F "files=@page1.jpg" ^
+  -F "files=@page2.jpg" ^
+  -F "mode=binary" ^
+  -F "pdf=true" ^
+  -F "readability=true"
+```
+
 ## 技術構成
 
 ```text

@@ -84,6 +84,36 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("corners_space", response.json()["detail"])
 
+    def test_process_batch_endpoint_returns_multi_page_pdf(self) -> None:
+        first = make_api_document()
+        second = make_api_document()
+
+        response = self.client.post(
+            "/api/process-batch",
+            files=[
+                ("files", ("page-one.jpg", first, "image/jpeg")),
+                ("files", ("page-two.jpg", second, "image/jpeg")),
+            ],
+            data={
+                "mode": "gray",
+                "pdf": "true",
+                "readability": "true",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        pdf_payload = base64.b64decode(payload["pdf_base64"])
+
+        self.assertEqual(payload["page_count"], 2)
+        self.assertEqual(len(payload["pages"]), 2)
+        self.assertEqual(payload["pages"][0]["page_index"], 1)
+        self.assertIn("readability", payload["pages"][0])
+        self.assertTrue(base64.b64decode(payload["pages"][0]["image_base64"]).startswith(b"\x89PNG"))
+        self.assertTrue(pdf_payload.startswith(b"%PDF-1.4"))
+        self.assertIn(b"/Count 2", pdf_payload)
+        self.assertEqual(pdf_payload.count(b"/Type /Page /Parent"), 2)
+
     def test_ocr_status_endpoint_reports_backends_without_ocr_dependency(self) -> None:
         response = self.client.get("/api/ocr/status", params={"language": "jpn+eng"})
 

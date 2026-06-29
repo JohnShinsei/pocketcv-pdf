@@ -8,7 +8,7 @@ import numpy as np
 
 from .corners import parse_corner_points
 from .evaluation import evaluate_readability
-from .export import build_docx_bytes, build_pdf_bytes
+from .export import build_docx_bytes, build_pdf_bytes, build_pdf_pages_bytes
 from .ocr import OcrUnavailableError, ocr_engine_status, recognize_image, recover_layout_markdown
 from .pipeline import enhance_image
 
@@ -28,6 +28,13 @@ def _decode_image(data: bytes) -> np.ndarray:
     if image is None:
         raise HTTPException(status_code=400, detail="Unsupported or unreadable image.")
     return image
+
+
+def _encode_png_base64(image: np.ndarray) -> str:
+    ok, encoded = cv2.imencode(".png", image)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to encode processed image.")
+    return base64.b64encode(encoded).decode("ascii")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -97,14 +104,10 @@ async def process_upload(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    ok, encoded = cv2.imencode(".png", result.image)
-    if not ok:
-        raise HTTPException(status_code=500, detail="Failed to encode processed image.")
-
     response: dict[str, object] = {
         "filename": file.filename,
         "mode": mode,
-        "image_base64": base64.b64encode(encoded).decode("ascii"),
+        "image_base64": _encode_png_base64(result.image),
         "report": result.report,
     }
     ocr_result = None
@@ -130,4 +133,53 @@ async def process_upload(
         response["pdf_searchable"] = bool(searchable_pdf and ocr_result is not None and ocr_result.lines)
     if readability or ocr_result is not None:
         response["readability"] = evaluate_readability(result.image, ocr_result=ocr_result, expected_text=expected_text)
+    return response
+
+
+@app.post("/api/process-batch")
+async def process_batch_upload(
+    files: list[UploadFile] = File(...),
+    mode: str = Form("color"),
+    auto_warp: bool = Form(True),
+    auto_dewarp: bool = Form(True),
+    pdf: bool = Form(True),
+    readability: bool = Form(False),
+) -> dict[str, object]:
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one file is required.")
+
+    pages: list[dict[str, object]] = []
+    processed_images: list[np.ndarray] = []
+    for index, file in enumerate(files, start=1):
+        image = _decode_image(await file.read())
+        try:
+            result = enhance_image(
+                image,
+                mode=mode,
+                auto_warp=auto_warp,
+                auto_dewarp=auto_dewarp,
+            )  # type: ignore[arg-type]
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"{file.filename or f'page-{index}'}: {exc}") from exc
+
+        page_payload: dict[str, object] = {
+            "page_index": index,
+            "filename": file.filename,
+            "image_base64": _encode_png_base64(result.image),
+            "report": result.report,
+        }
+        if readability:
+            page_payload["readability"] = evaluate_readability(result.image)
+        pages.append(page_payload)
+        processed_images.append(result.image)
+
+    response: dict[str, object] = {
+        "mode": mode,
+        "page_count": len(pages),
+        "pages": pages,
+    }
+    if pdf:
+        pdf_bytes = build_pdf_pages_bytes(processed_images, title="pocketcv-batch", searchable=False)
+        response["pdf_base64"] = base64.b64encode(pdf_bytes).decode("ascii")
+        response["pdf_searchable"] = False
     return response
