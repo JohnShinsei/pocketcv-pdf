@@ -15,7 +15,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from clearscan_cv.export import build_docx_bytes, build_pdf_bytes, write_docx, write_pdf  # noqa: E402
+from clearscan_cv.export import build_docx_bytes, build_pdf_bytes, build_pdf_pages_bytes, write_docx, write_pdf, write_pdf_pages  # noqa: E402
 from clearscan_cv.ocr import OcrLine, OcrResult  # noqa: E402
 
 
@@ -58,6 +58,29 @@ class ExportTest(unittest.TestCase):
             self.assertTrue(export.searchable)
             self.assertEqual(export.text_lines, 1)
 
+    def test_builds_multi_page_image_pdf(self) -> None:
+        first = make_scan_image()
+        second = cv2.rotate(make_scan_image(), cv2.ROTATE_90_CLOCKWISE)
+
+        pdf = build_pdf_pages_bytes([first, second], title="batch", searchable=False)
+
+        self.assertTrue(pdf.startswith(b"%PDF-1.4"))
+        self.assertIn(b"/Count 2", pdf)
+        self.assertEqual(pdf.count(b"/Type /Page /Parent"), 2)
+        self.assertEqual(pdf.count(b"/Subtype /Image"), 2)
+
+    def test_write_pdf_pages_reports_page_metadata(self) -> None:
+        first = make_scan_image()
+        second = cv2.rotate(make_scan_image(), cv2.ROTATE_90_CLOCKWISE)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            export = write_pdf_pages([first, second], Path(tmp) / "batch.pdf", searchable=False)
+
+            self.assertTrue(Path(export.path).exists())
+            self.assertEqual(export.page_count, 2)
+            self.assertFalse(export.searchable)
+            self.assertEqual(export.page_sizes, [{"width": 180, "height": 260}, {"width": 260, "height": 180}])
+
     def test_cli_writes_image_pdf_without_ocr_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -89,6 +112,41 @@ class ExportTest(unittest.TestCase):
             self.assertTrue(pdf_path.exists())
             self.assertFalse(payload["pdf"]["searchable"])
             self.assertTrue(pdf_path.read_bytes().startswith(b"%PDF-1.4"))
+
+    def test_cli_writes_multi_page_pdf_from_multiple_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_one = tmp_path / "input-one.png"
+            cv2.imwrite(str(input_one), make_scan_image())
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "clearscan_cv.cli",
+                    str(input_one),
+                    str(input_one),
+                    "--out",
+                    str(tmp_path / "out"),
+                    "--mode",
+                    "gray",
+                    "--pdf",
+                ],
+                cwd=ROOT,
+                env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            pdf_path = Path(payload["batch_pdf_path"])
+            self.assertEqual(payload["page_count"], 2)
+            self.assertEqual(payload["pdf"]["page_count"], 2)
+            self.assertNotEqual(payload["reports"][0]["output_path"], payload["reports"][1]["output_path"])
+            self.assertTrue(pdf_path.exists())
+            self.assertIn(b"/Count 2", pdf_path.read_bytes())
 
     def test_builds_docx_from_recovered_markdown(self) -> None:
         payload = build_docx_bytes("## 診断\n\n本文テキスト", title="OCR Result")

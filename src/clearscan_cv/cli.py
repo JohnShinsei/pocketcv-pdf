@@ -9,14 +9,14 @@ import numpy as np
 
 from .corners import parse_corner_points
 from .evaluation import evaluate_readability
-from .export import write_docx, write_pdf
+from .export import write_docx, write_pdf, write_pdf_pages
 from .ocr import OcrUnavailableError, ocr_engine_status, recognize_image, recover_layout_markdown
 from .pipeline import process_file
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Enhance document photos and generate an image quality report.")
-    parser.add_argument("input", nargs="?", help="Path to an input image.")
+    parser.add_argument("inputs", nargs="*", help="Path to one or more input images.")
     parser.add_argument("--out", default="outputs", help="Output directory.")
     parser.add_argument("--mode", choices=["color", "gray", "binary"], default="color", help="Output style.")
     parser.add_argument("--no-warp", action="store_true", help="Disable automatic perspective correction.")
@@ -64,8 +64,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.ocr_status:
         print(json.dumps(ocr_engine_status(language=args.ocr_lang), indent=2))
         return 0
-    if not args.input:
+    if not args.inputs:
         parser.error("input is required unless --ocr-status is used")
+    if len(args.inputs) > 1 and args.corners:
+        parser.error("--corners can only be used with one input image")
+    if len(args.inputs) > 1 and (args.ocr or args.layout or args.searchable_pdf or args.docx):
+        parser.error("multiple inputs currently support scan image/PDF output; OCR layout exports require one input")
     if args.no_warp and args.corners:
         parser.error("--corners cannot be combined with --no-warp")
     try:
@@ -73,8 +77,51 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
 
+    if len(args.inputs) > 1:
+        output_dir = Path(args.out)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        reports: list[dict[str, object]] = []
+        output_images: list[np.ndarray] = []
+        for page_index, input_path in enumerate(args.inputs, start=1):
+            output_stem = f"{page_index:03d}_{Path(input_path).stem}"
+            page_report = process_file(
+                input_path=input_path,
+                output_dir=output_dir,
+                mode=args.mode,
+                auto_warp=not args.no_warp,
+                auto_dewarp=not args.no_dewarp,
+                side_by_side=args.compare,
+                output_stem=output_stem,
+            )
+            page_report["page_index"] = page_index
+            output_image = _read_image(page_report["output_path"])
+            output_images.append(output_image)
+            if args.readability:
+                page_report["readability"] = evaluate_readability(output_image)
+                Path(str(page_report["report_path"])).write_text(json.dumps(page_report, indent=2), encoding="utf-8")
+            reports.append(page_report)
+
+        batch_report: dict[str, object] = {
+            "inputs": args.inputs,
+            "output_dir": str(output_dir),
+            "mode": args.mode,
+            "page_count": len(reports),
+            "reports": reports,
+        }
+        if args.pdf:
+            pdf_path = output_dir / "clearscan_batch_scan.pdf"
+            pdf_export = write_pdf_pages(output_images, pdf_path, title="clearscan-batch", searchable=False)
+            batch_report["pdf"] = pdf_export.to_dict()
+            batch_report["batch_pdf_path"] = str(pdf_path)
+
+        batch_report_path = output_dir / "clearscan_batch_report.json"
+        batch_report["batch_report_path"] = str(batch_report_path)
+        batch_report_path.write_text(json.dumps(batch_report, indent=2), encoding="utf-8")
+        print(json.dumps(batch_report, indent=2))
+        return 0
+
     report = process_file(
-        input_path=args.input,
+        input_path=args.inputs[0],
         output_dir=args.out,
         mode=args.mode,
         auto_warp=not args.no_warp,
@@ -110,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
             if layout_markdown is None:
                 layout_markdown = recover_layout_markdown(ocr_result)
             docx_path = output_path.with_name(f"{output_path.stem}_layout.docx")
-            docx_export = write_docx(layout_markdown or ocr_result.text, docx_path, title=Path(str(args.input)).stem)
+            docx_export = write_docx(layout_markdown or ocr_result.text, docx_path, title=Path(str(args.inputs[0])).stem)
             report["docx"] = docx_export.to_dict()
             report["docx_path"] = str(docx_path)
 
@@ -126,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
         pdf_export = write_pdf(
             output_image,
             pdf_path,
-            title=Path(str(args.input)).stem,
+            title=Path(str(args.inputs[0])).stem,
             ocr_result=ocr_result,
             searchable=args.searchable_pdf,
         )

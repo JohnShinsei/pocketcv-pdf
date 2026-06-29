@@ -401,6 +401,7 @@ def process_file(
     side_by_side: bool = False,
     manual_corners: CornerPoints | None = None,
     manual_corners_space: CornerCoordinateSpace = "input",
+    output_stem: str | None = None,
 ) -> dict[str, object]:
     input_path = Path(input_path)
     output_dir = Path(output_dir)
@@ -419,8 +420,9 @@ def process_file(
         manual_corners=manual_corners,
         manual_corners_space=manual_corners_space,
     )
-    output_path = output_dir / f"{input_path.stem}_clearscan.png"
-    report_path = output_dir / f"{input_path.stem}_report.json"
+    stem = output_stem or input_path.stem
+    output_path = output_dir / f"{stem}_clearscan.png"
+    report_path = output_dir / f"{stem}_report.json"
     cv2.imwrite(str(output_path), result.image)
 
     report = {
@@ -431,7 +433,7 @@ def process_file(
     }
 
     if side_by_side:
-        compare_path = output_dir / f"{input_path.stem}_comparison.png"
+        compare_path = output_dir / f"{stem}_comparison.png"
         cv2.imwrite(str(compare_path), build_side_by_side(image, result.image))
         report["comparison_path"] = str(compare_path)
 

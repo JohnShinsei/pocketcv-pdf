@@ -26,6 +26,8 @@ class PdfExport:
     height: int
     searchable: bool
     text_lines: int
+    page_count: int = 1
+    page_sizes: list[dict[str, int]] | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -34,6 +36,8 @@ class PdfExport:
             "height": self.height,
             "searchable": self.searchable,
             "text_lines": self.text_lines,
+            "page_count": self.page_count,
+            "page_sizes": self.page_sizes or [{"width": self.width, "height": self.height}],
         }
 
 
@@ -56,6 +60,15 @@ class _PdfBuilder:
             body = body.encode("latin-1")
         self._objects.append(body)
         return len(self._objects)
+
+    def reserve(self) -> int:
+        self._objects.append(b"")
+        return len(self._objects)
+
+    def set(self, object_id: int, body: bytes | str) -> None:
+        if isinstance(body, str):
+            body = body.encode("latin-1")
+        self._objects[object_id - 1] = body
 
     def build(self, root_object: int, info_object: int | None = None) -> bytes:
         chunks = [b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n"]
@@ -123,8 +136,7 @@ def _line_text_commands(result: OcrResult, draw_width: float, draw_height: float
     return commands
 
 
-def build_pdf_bytes(image: np.ndarray, title: str = "PocketCV PDF", ocr_result: OcrResult | None = None, searchable: bool = True) -> bytes:
-    image_payload, color_space, image_width, image_height = _image_stream(image)
+def _page_draw_box(image_width: int, image_height: int) -> tuple[float, float, float, float]:
     page_width = A4_WIDTH_PT
     page_height = A4_HEIGHT_PT
     scale = min(page_width / float(image_width), page_height / float(image_height))
@@ -132,10 +144,19 @@ def build_pdf_bytes(image: np.ndarray, title: str = "PocketCV PDF", ocr_result: 
     draw_height = image_height * scale
     origin_x = (page_width - draw_width) / 2.0
     origin_y = (page_height - draw_height) / 2.0
+    return draw_width, draw_height, origin_x, origin_y
 
-    builder = _PdfBuilder()
-    catalog_object = builder.add("<< /Type /Catalog /Pages 2 0 R >>")
-    pages_object = builder.add("<< /Type /Pages /Kids [6 0 R] /Count 1 >>")
+
+def _add_pdf_page(
+    builder: _PdfBuilder,
+    pages_object: int,
+    font_object: int,
+    image: np.ndarray,
+    ocr_result: OcrResult | None = None,
+    searchable: bool = True,
+) -> int:
+    image_payload, color_space, image_width, image_height = _image_stream(image)
+    draw_width, draw_height, origin_x, origin_y = _page_draw_box(image_width, image_height)
     image_object = builder.add(
         (
             f"<< /Type /XObject /Subtype /Image /Width {image_width} /Height {image_height} "
@@ -145,8 +166,6 @@ def build_pdf_bytes(image: np.ndarray, title: str = "PocketCV PDF", ocr_result: 
         + image_payload
         + b"\nendstream"
     )
-    font_object = builder.add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
-
     commands = [
         "q\n",
         f"{draw_width:.2f} 0 0 {draw_height:.2f} {origin_x:.2f} {origin_y:.2f} cm\n",
@@ -161,15 +180,40 @@ def build_pdf_bytes(image: np.ndarray, title: str = "PocketCV PDF", ocr_result: 
     content_object = builder.add(
         f"<< /Length {len(content_payload)} >>\nstream\n".encode("latin-1") + content_payload + b"\nendstream"
     )
-    page_object = builder.add(
+    return builder.add(
         (
-            f"<< /Type /Page /Parent {pages_object} 0 R /MediaBox [0 0 {page_width:.2f} {page_height:.2f}] "
+            f"<< /Type /Page /Parent {pages_object} 0 R /MediaBox [0 0 {A4_WIDTH_PT:.2f} {A4_HEIGHT_PT:.2f}] "
             f"/Resources << /XObject << /Im0 {image_object} 0 R >> /Font << /F1 {font_object} 0 R >> >> "
             f"/Contents {content_object} 0 R >>"
         )
     )
-    if page_object != 6:
-        raise RuntimeError("Unexpected PDF object layout.")
+
+
+def build_pdf_pages_bytes(
+    images: list[np.ndarray],
+    title: str = "PocketCV PDF",
+    ocr_results: list[OcrResult | None] | None = None,
+    searchable: bool = True,
+) -> bytes:
+    if not images:
+        raise ValueError("at least one image is required")
+    ocr_results = ocr_results or [None] * len(images)
+    if len(ocr_results) != len(images):
+        raise ValueError("ocr_results length must match images length")
+
+    builder = _PdfBuilder()
+    catalog_object = builder.reserve()
+    pages_object = builder.reserve()
+    font_object = builder.add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+    page_objects = [
+        _add_pdf_page(builder, pages_object, font_object, image, ocr_result=ocr_result, searchable=searchable)
+        for image, ocr_result in zip(images, ocr_results)
+    ]
+    builder.set(catalog_object, f"<< /Type /Catalog /Pages {pages_object} 0 R >>")
+    builder.set(
+        pages_object,
+        f"<< /Type /Pages /Kids [{' '.join(f'{page} 0 R' for page in page_objects)}] /Count {len(page_objects)} >>",
+    )
     info_object = builder.add(
         (
             "<< "
@@ -182,6 +226,10 @@ def build_pdf_bytes(image: np.ndarray, title: str = "PocketCV PDF", ocr_result: 
         )
     )
     return builder.build(catalog_object, info_object=info_object)
+
+
+def build_pdf_bytes(image: np.ndarray, title: str = "PocketCV PDF", ocr_result: OcrResult | None = None, searchable: bool = True) -> bytes:
+    return build_pdf_pages_bytes([image], title=title, ocr_results=[ocr_result], searchable=searchable)
 
 
 def write_pdf(
@@ -198,6 +246,35 @@ def write_pdf(
     image_height, image_width = image.shape[:2]
     text_lines = len([line for line in (ocr_result.lines if ocr_result else []) if line.text.strip()]) if searchable else 0
     return PdfExport(path=str(output_path), width=image_width, height=image_height, searchable=searchable and text_lines > 0, text_lines=text_lines)
+
+
+def write_pdf_pages(
+    images: list[np.ndarray],
+    output_path: str | Path,
+    title: str = "PocketCV PDF",
+    ocr_results: list[OcrResult | None] | None = None,
+    searchable: bool = True,
+) -> PdfExport:
+    if not images:
+        raise ValueError("at least one image is required")
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = build_pdf_pages_bytes(images, title=title, ocr_results=ocr_results, searchable=searchable)
+    output_path.write_bytes(payload)
+    page_sizes = [{"width": int(image.shape[1]), "height": int(image.shape[0])} for image in images]
+    ocr_results = ocr_results or [None] * len(images)
+    text_lines = 0
+    if searchable:
+        text_lines = sum(len([line for line in (result.lines if result else []) if line.text.strip()]) for result in ocr_results)
+    return PdfExport(
+        path=str(output_path),
+        width=page_sizes[0]["width"],
+        height=page_sizes[0]["height"],
+        searchable=searchable and text_lines > 0,
+        text_lines=text_lines,
+        page_count=len(images),
+        page_sizes=page_sizes,
+    )
 
 
 def _content_types_xml() -> str:
