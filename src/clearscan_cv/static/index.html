@@ -1306,7 +1306,8 @@
         }
 
         const corrected = perspectiveCorrectCanvas(page.sourceCanvas, page.manualCorners);
-        page.ocrCanvas = enhanceCanvas(corrected.canvas, "gray", corrected.detection).canvas;
+        const deskewed = deskewCanvasByTextLines(corrected.canvas, corrected.detection);
+        page.ocrCanvas = enhanceCanvas(deskewed.canvas, "gray", deskewed.detection).canvas;
         return page.ocrCanvas;
       }
 
@@ -1701,6 +1702,7 @@
           const joined = chunks.join("\n\n").trim();
           state.ocrText = joined;
           state.ocrPages = ocrPages;
+          revokePdfUrl();
           if (confidences.length) {
             state.ocrConfidence = confidences.reduce((sum, value) => sum + value, 0) / confidences.length;
           }
@@ -3924,7 +3926,44 @@
         )}${pad(date.getSeconds())}${sign}${hours}'${minutes}'`;
       }
 
-      async function createPdfBlob(pages, title = "PocketCV PDF") {
+      function ocrPageForPdf(index, ocrPages) {
+        return (
+          (ocrPages || []).find((page) => page && page.pageIndex === index && Array.isArray(page.lines) && page.lines.length) || null
+        );
+      }
+
+      function pdfHiddenTextCommands(ocrPage, drawWidth, drawHeight, originX, originY) {
+        if (!ocrPage || !ocrPage.width || !ocrPage.height || !Array.isArray(ocrPage.lines)) {
+          return "";
+        }
+
+        const scaleX = drawWidth / Math.max(1, ocrPage.width);
+        const scaleY = drawHeight / Math.max(1, ocrPage.height);
+        return ocrPage.lines
+          .map((line) => {
+            const text = normalizeOcrText(line.text);
+            const box = line.bbox;
+            if (!text || !box) {
+              return "";
+            }
+            const x0 = clamp(Number(box.x0), 0, ocrPage.width);
+            const y0 = clamp(Number(box.y0), 0, ocrPage.height);
+            const x1 = clamp(Number(box.x1), 0, ocrPage.width);
+            const y1 = clamp(Number(box.y1), 0, ocrPage.height);
+            if (![x0, y0, x1, y1].every(Number.isFinite) || x1 <= x0 || y1 <= y0) {
+              return "";
+            }
+            const pdfX = originX + x0 * scaleX;
+            const pdfY = originY + (ocrPage.height - y1) * scaleY;
+            const fontSize = clamp((y1 - y0) * scaleY * 0.92, 4, 32);
+            return `BT /F1 ${fontSize.toFixed(2)} Tf 3 Tr 1 0 0 1 ${pdfX.toFixed(2)} ${pdfY.toFixed(2)} Tm ${pdfUtf16HexString(
+              text
+            )} Tj ET\n`;
+          })
+          .join("");
+      }
+
+      async function createPdfBlob(pages, title = "PocketCV PDF", ocrPages = []) {
         const encoder = new TextEncoder();
         const objects = new Map();
         let nextId = 1;
@@ -3933,6 +3972,7 @@
         const catalogId = reserve();
         const pagesId = reserve();
         const infoId = reserve();
+        const fontId = reserve();
         const pageRefs = [];
 
         const imageData = [];
@@ -3954,12 +3994,15 @@
           const x = (A4_WIDTH - drawWidth) / 2;
           const y = (A4_HEIGHT - drawHeight) / 2;
           const imageName = `/Im${index + 1}`;
-          const content = `q\n${drawWidth.toFixed(2)} 0 0 ${drawHeight.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm\n${imageName} Do\nQ\n`;
+          const hiddenText = pdfHiddenTextCommands(ocrPageForPdf(index, ocrPages), drawWidth, drawHeight, x, y);
+          const content = `q\n${drawWidth.toFixed(2)} 0 0 ${drawHeight.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(
+            2
+          )} cm\n${imageName} Do\nQ\n${hiddenText}`;
           const contentBytes = encoder.encode(content);
 
           objects.set(pageId, [
             textBytes(
-              `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${A4_WIDTH} ${A4_HEIGHT}] /Resources << /XObject << ${imageName} ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>`
+              `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${A4_WIDTH} ${A4_HEIGHT}] /Resources << /XObject << ${imageName} ${imageId} 0 R >> /Font << /F1 ${fontId} 0 R >> >> /Contents ${contentId} 0 R >>`
             ),
           ]);
           objects.set(contentId, [
@@ -3979,6 +4022,7 @@
         const now = pdfDateString();
         objects.set(catalogId, [textBytes(`<< /Type /Catalog /Pages ${pagesId} 0 R /Lang (ja-JP) >>`)]);
         objects.set(pagesId, [textBytes(`<< /Type /Pages /Count ${pages.length} /Kids [${pageRefs.join(" ")}] >>`)]);
+        objects.set(fontId, [textBytes("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")]);
         objects.set(infoId, [
           textBytes(
             `<< /Title ${pdfUtf16HexString(title)} /Author ${pdfUtf16HexString("PocketCV PDF")} /Creator ${pdfUtf16HexString(
@@ -4030,7 +4074,7 @@
         setStatus("端末内でPDFを生成中...");
         try {
           const pdfTitle = sanitizePdfName(filenameInput.value);
-          const blob = await createPdfBlob(state.pages, pdfTitle);
+          const blob = await createPdfBlob(state.pages, pdfTitle, state.ocrPages);
           if (!blob.size) {
             throw new Error("PDF生成に失敗しました。");
           }
@@ -4045,7 +4089,10 @@
           shareButton.disabled = false;
           downloadEl.click();
           setBusy(false);
-          setStatus(`PDF生成完了 - ${state.pages.length}件 / ${formatFileSize(blob.size)}`);
+          const searchable = state.ocrPages.some((page) => page && Array.isArray(page.lines) && page.lines.length);
+          setStatus(
+            `PDF生成完了 - ${state.pages.length}件${searchable ? " / OCR文字層付き" : ""} / ${formatFileSize(blob.size)}`
+          );
           return blob;
         } catch (error) {
           setBusy(false);
