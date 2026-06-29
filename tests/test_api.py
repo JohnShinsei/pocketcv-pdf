@@ -190,6 +190,33 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(pdf_payload.count(b"3 Tr"), 2)
         self.assertTrue(docx_payload.startswith(b"PK"))
 
+    def test_process_endpoint_quality_diagnostics_include_low_ocr_confidence(self) -> None:
+        original_recognize = api_module.recognize_image
+
+        def fake_low_confidence(image: np.ndarray, language: str = "jpn+eng", engine: str = "auto") -> OcrResult:
+            height, width = image.shape[:2]
+            line = OcrLine("NOISY OCR", 31.0, (max(1, width // 5), max(1, height // 5), max(1, width // 3), 24))
+            return OcrResult("fake", language, "NOISY OCR", 31.0, width, height, [line])
+
+        api_module.recognize_image = fake_low_confidence
+        try:
+            response = self.client.post(
+                "/api/process",
+                files={"file": ("api-input.jpg", make_api_document(), "image/jpeg")},
+                data={
+                    "mode": "gray",
+                    "ocr": "true",
+                    "readability": "true",
+                },
+            )
+        finally:
+            api_module.recognize_image = original_recognize
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        issue_codes = {issue["code"] for issue in payload["report"]["quality_diagnostics"]["issues"]}
+        self.assertIn("ocr_low_confidence", issue_codes)
+
     def test_ocr_status_endpoint_reports_backends_without_ocr_dependency(self) -> None:
         response = self.client.get("/api/ocr/status", params={"language": "jpn+eng"})
 

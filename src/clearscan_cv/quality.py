@@ -97,6 +97,27 @@ def _metric_float(metrics: dict[str, object], key: str, default: float = 0.0) ->
         return default
 
 
+def _nested_metric_float(metrics: dict[str, object], keys: tuple[str, ...], default: float = 0.0) -> float:
+    current: object = metrics
+    for key in keys:
+        if not isinstance(current, dict):
+            return default
+        current = current.get(key)
+    try:
+        return float(current)
+    except (TypeError, ValueError):
+        return default
+
+
+def _nested_metric_exists(metrics: dict[str, object], keys: tuple[str, ...]) -> bool:
+    current: object = metrics
+    for key in keys:
+        if not isinstance(current, dict) or key not in current:
+            return False
+        current = current[key]
+    return current is not None
+
+
 def diagnose_scan_quality(
     metrics: dict[str, object],
     *,
@@ -174,6 +195,48 @@ def diagnose_scan_quality(
             "Text lines still look tilted or curved.",
             "Adjust the four corners or retake from directly above.",
         )
+    if readability is not None and isinstance(readability.get("ocr_quality"), dict):
+        ocr_line_count = _nested_metric_float(readability, ("ocr_quality", "line_count"))
+        ocr_character_count = _nested_metric_float(readability, ("ocr_quality", "character_count"))
+        mean_confidence = _nested_metric_float(readability, ("ocr_quality", "mean_confidence"), 100.0)
+        low_confidence_ratio = _nested_metric_float(readability, ("ocr_quality", "low_confidence_ratio"))
+        if ocr_line_count <= 0 or ocr_character_count <= 0:
+            add_issue(
+                "ocr_empty",
+                "high",
+                "OCR detected little or no text.",
+                "Check the selected language, use grayscale output, or retake with sharper focus.",
+            )
+        elif mean_confidence < 50.0:
+            add_issue(
+                "ocr_low_confidence",
+                "high",
+                "OCR confidence is low.",
+                "Use grayscale output, check language data, or retake with better focus.",
+            )
+        elif mean_confidence < 68.0 or low_confidence_ratio > 0.35:
+            add_issue(
+                "ocr_review",
+                "medium",
+                "OCR confidence should be reviewed.",
+                "Review low-confidence lines before using the recovered document.",
+            )
+        if _nested_metric_exists(readability, ("ocr_quality", "character_error_rate")):
+            character_error_rate = _nested_metric_float(readability, ("ocr_quality", "character_error_rate"))
+            if character_error_rate > 0.25:
+                add_issue(
+                    "ocr_high_cer",
+                    "high",
+                    "OCR character error rate is high against the reference text.",
+                    "Retake or tune the processing mode before trusting OCR output.",
+                )
+            elif character_error_rate > 0.12:
+                add_issue(
+                    "ocr_cer_review",
+                    "medium",
+                    "OCR character error rate should be reviewed.",
+                    "Compare the searchable text with the original page before export.",
+                )
 
     if score < 45.0:
         add_issue(

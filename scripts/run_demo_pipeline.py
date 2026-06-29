@@ -17,6 +17,7 @@ from clearscan_cv.evaluation import evaluate_readability  # noqa: E402
 from clearscan_cv.export import write_docx, write_pdf  # noqa: E402
 from clearscan_cv.ocr import OcrUnavailableError, ocr_engine_status, recognize_image, recover_layout_markdown  # noqa: E402
 from clearscan_cv.pipeline import process_file  # noqa: E402
+from clearscan_cv.quality import diagnose_scan_quality  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -107,6 +108,16 @@ def _first_install_hint(status: dict[str, Any]) -> str | None:
         if isinstance(payload, dict) and payload.get("install"):
             return str(payload["install"])
     return None
+
+
+def _perspective_confidence(report: dict[str, Any]) -> float:
+    detection = report.get("document_detection")
+    if isinstance(detection, dict):
+        try:
+            return float(detection.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
 
 
 def run_demo(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
@@ -216,6 +227,12 @@ def run_demo(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             exit_code = 2 if args.require_ocr else 0
 
     summary["readability"] = evaluate_readability(output_image, ocr_result=ocr_result, expected_text=expected_text)
+    if isinstance(summary.get("output_quality"), dict):
+        summary["quality_diagnostics"] = diagnose_scan_quality(
+            summary["output_quality"],
+            perspective_confidence=_perspective_confidence(scan_report),
+            readability=summary["readability"],
+        )
     summary_path = output_dir / "demo_summary.json"
     summary["artifacts"]["demo_summary"] = str(summary_path)
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")

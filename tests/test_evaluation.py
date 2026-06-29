@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from clearscan_cv.evaluation import character_error_rate, edit_distance, evaluate_ocr_result, evaluate_readability  # noqa: E402
 from clearscan_cv.ocr import OcrLine, OcrResult, OcrWord  # noqa: E402
+from clearscan_cv.quality import diagnose_scan_quality  # noqa: E402
 
 
 def make_text_page() -> np.ndarray:
@@ -61,6 +62,34 @@ class EvaluationTest(unittest.TestCase):
         self.assertIn("textline_horizontal_score", metrics)
         self.assertGreaterEqual(metrics["readability_score"], 0)
 
+    def test_quality_diagnostics_uses_ocr_confidence_and_cer(self) -> None:
+        diagnostics = diagnose_scan_quality(
+            {
+                "score": 82.0,
+                "shadow_residual": 0.0,
+                "shadow_score": 1.0,
+                "ink_density": 0.04,
+                "edge_density": 0.04,
+                "boldness_risk": 0.0,
+            },
+            perspective_confidence=0.9,
+            readability={
+                "textline_horizontal_score": 0.92,
+                "ocr_quality": {
+                    "line_count": 3,
+                    "character_count": 24,
+                    "mean_confidence": 42.0,
+                    "low_confidence_ratio": 0.67,
+                    "character_error_rate": 0.31,
+                },
+            },
+        )
+
+        issue_codes = {issue["code"] for issue in diagnostics["issues"]}  # type: ignore[index]
+        self.assertIn("ocr_low_confidence", issue_codes)
+        self.assertIn("ocr_high_cer", issue_codes)
+        self.assertEqual(diagnostics["status"], "review")
+
     def test_cli_readability_report_without_ocr_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -90,6 +119,8 @@ class EvaluationTest(unittest.TestCase):
             payload = json.loads(completed.stdout)
             self.assertIn("readability", payload)
             self.assertIn("textline_horizontal_score", payload["readability"])
+            self.assertIn("quality_diagnostics", payload)
+            self.assertIn("issues", payload["quality_diagnostics"])
 
 
 if __name__ == "__main__":

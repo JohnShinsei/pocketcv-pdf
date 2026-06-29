@@ -11,6 +11,7 @@ from .evaluation import evaluate_readability
 from .export import build_docx_bytes, build_pdf_bytes, build_pdf_pages_bytes
 from .ocr import OcrUnavailableError, ocr_engine_status, recognize_image, recover_layout_markdown
 from .pipeline import enhance_image
+from .quality import diagnose_scan_quality
 
 try:
     from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -35,6 +36,26 @@ def _encode_png_base64(image: np.ndarray) -> str:
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to encode processed image.")
     return base64.b64encode(encoded).decode("ascii")
+
+
+def _perspective_confidence(report: dict[str, object]) -> float:
+    detection = report.get("document_detection")
+    if isinstance(detection, dict):
+        try:
+            return float(detection.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
+
+
+def _refresh_quality_diagnostics(report: dict[str, object], readability: dict[str, object]) -> None:
+    output_quality = report.get("output_quality")
+    if isinstance(output_quality, dict):
+        report["quality_diagnostics"] = diagnose_scan_quality(
+            output_quality,
+            perspective_confidence=_perspective_confidence(report),
+            readability=readability,
+        )
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -136,6 +157,7 @@ async def process_upload(
         response["pdf_searchable"] = bool(searchable_pdf and ocr_result is not None and ocr_result.lines)
     if readability or ocr_result is not None:
         response["readability"] = evaluate_readability(result.image, ocr_result=ocr_result, expected_text=expected_text)
+        _refresh_quality_diagnostics(response["report"], response["readability"])  # type: ignore[arg-type]
     return response
 
 
@@ -197,6 +219,7 @@ async def process_batch_upload(
                 )
         if readability:
             page_payload["readability"] = evaluate_readability(result.image, ocr_result=ocr_result)
+            _refresh_quality_diagnostics(page_payload["report"], page_payload["readability"])  # type: ignore[arg-type]
         pages.append(page_payload)
         processed_images.append(result.image)
         ocr_results.append(ocr_result)

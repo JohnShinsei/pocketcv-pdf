@@ -12,6 +12,7 @@ from .evaluation import evaluate_readability
 from .export import write_docx, write_pdf, write_pdf_pages
 from .ocr import OcrUnavailableError, ocr_engine_status, recognize_image, recover_layout_markdown
 from .pipeline import process_file
+from .quality import diagnose_scan_quality
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -62,6 +63,26 @@ def _read_image(path: str | Path) -> np.ndarray:
     if image is None:
         raise FileNotFoundError(f"Could not read image: {path}")
     return image
+
+
+def _perspective_confidence(report: dict[str, object]) -> float:
+    detection = report.get("document_detection")
+    if isinstance(detection, dict):
+        try:
+            return float(detection.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
+
+
+def _refresh_quality_diagnostics(report: dict[str, object], readability: dict[str, object]) -> None:
+    output_quality = report.get("output_quality")
+    if isinstance(output_quality, dict):
+        report["quality_diagnostics"] = diagnose_scan_quality(
+            output_quality,
+            perspective_confidence=_perspective_confidence(report),
+            readability=readability,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -130,6 +151,7 @@ def main(argv: list[str] | None = None) -> int:
             ocr_results.append(ocr_result)
             if args.readability:
                 page_report["readability"] = evaluate_readability(output_image, ocr_result=ocr_result)
+                _refresh_quality_diagnostics(page_report, page_report["readability"])  # type: ignore[arg-type]
                 Path(str(page_report["report_path"])).write_text(json.dumps(page_report, indent=2), encoding="utf-8")
             reports.append(page_report)
 
@@ -225,6 +247,7 @@ def main(argv: list[str] | None = None) -> int:
         if output_image is None:
             output_image = _read_image(output_path)
         report["readability"] = evaluate_readability(output_image, ocr_result=ocr_result, expected_text=expected_text)
+        _refresh_quality_diagnostics(report, report["readability"])  # type: ignore[arg-type]
 
     if args.pdf or args.searchable_pdf:
         if output_image is None:
