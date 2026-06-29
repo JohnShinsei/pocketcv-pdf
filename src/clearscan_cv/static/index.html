@@ -3848,6 +3848,83 @@
         };
       }
 
+      function buildColorGeometryResult(sourceCanvas, detection) {
+        const context = sourceCanvas.getContext("2d", { willReadFrequently: true });
+        const image = context.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+        const data = image.data;
+        const tileSize = Math.max(42, Math.round(Math.max(sourceCanvas.width, sourceCanvas.height) / 34));
+        const step = Math.max(1, Math.floor(Math.max(sourceCanvas.width, sourceCanvas.height) / 1500));
+        let samples = 0;
+        let sum = 0;
+        let sumSquares = 0;
+        let edgeCount = 0;
+
+        for (let y = 0; y < sourceCanvas.height; y += step) {
+          for (let x = 0; x < sourceCanvas.width; x += step) {
+            const index = (y * sourceCanvas.width + x) * 4;
+            const value = luminance(data[index], data[index + 1], data[index + 2]);
+            sum += value;
+            sumSquares += value * value;
+            samples += 1;
+
+            if (x + step < sourceCanvas.width && y + step < sourceCanvas.height) {
+              const right = ((y * sourceCanvas.width + (x + step)) * 4);
+              const bottom = (((y + step) * sourceCanvas.width + x) * 4);
+              const rightValue = luminance(data[right], data[right + 1], data[right + 2]);
+              const bottomValue = luminance(data[bottom], data[bottom + 1], data[bottom + 2]);
+              if (Math.abs(rightValue - value) + Math.abs(bottomValue - value) > 42) {
+                edgeCount += 1;
+              }
+            }
+          }
+        }
+
+        const scanMetrics = assessOutputScanMetrics(data, sourceCanvas.width, sourceCanvas.height, tileSize);
+        const mean = sum / Math.max(1, samples);
+        const contrast = Math.sqrt(Math.max(0, sumSquares / Math.max(1, samples) - mean * mean));
+        const baseQuality =
+          (detection.found ? detection.confidence * 36 : 10) +
+          clamp(contrast / 95, 0, 1) * 28 +
+          clamp(edgeCount / Math.max(1, samples) / 0.16, 0, 1) * 24 +
+          clamp((mean - 70) / 165, 0, 1) * 12;
+        const qualityScore = clamp(baseQuality - (1 - scanMetrics.shadowScore) * 6, 0, 100);
+        const edgeCanvas = document.createElement("canvas");
+        edgeCanvas.width = sourceCanvas.width;
+        edgeCanvas.height = sourceCanvas.height;
+        edgeCanvas.getContext("2d").drawImage(sourceCanvas, 0, 0);
+        return {
+          canvas: sourceCanvas,
+          edgeCanvas,
+          metrics: {
+            qualityScore,
+            perspectiveConfidence: detection.found ? detection.confidence : 0,
+            edgeDensity: edgeCount / Math.max(1, samples),
+            contrast,
+            brightness: mean,
+            threshold: "-",
+            deskewAngle: 0,
+            deskewConfidence: 0,
+            backgroundRange: 0,
+            useFrequencyDeshadow: false,
+            useGatosSauvola: false,
+            shadowResidual: scanMetrics.shadowResidual,
+            shadowScore: scanMetrics.shadowScore,
+            inkDensity: scanMetrics.inkDensity,
+            boldnessRisk: 0,
+            brokenStrokeRisk: 0,
+            fragmentEdgeRatio: 0,
+            isolatedDarkRatio: 0,
+            strokeThinApplied: false,
+            strokeThinInkBefore: null,
+            strokeThinInkAfter: null,
+            paperGrayResidue: scanMetrics.paperGrayResidue,
+            requestedMode: "color",
+            selectedMode: "color",
+            autoSelection: null,
+          },
+        };
+      }
+
       function drawContained(context, sourceCanvas, x, y, width, height) {
         context.fillStyle = "#f2f4f7";
         context.fillRect(x, y, width, height);
@@ -3931,8 +4008,13 @@
       async function processSourceCanvas(sourceCanvas, sourceBlob, name, manualCorners = null) {
         const renderMode = modeEl.value;
         const corrected = perspectiveCorrectCanvas(sourceCanvas, manualCorners);
-        const deskewed = deskewCanvasByTextLines(corrected.canvas, corrected.detection);
-        const enhanced = enhanceCanvas(deskewed.canvas, renderMode, deskewed.detection);
+        const enhanced =
+          renderMode === "color"
+            ? buildColorGeometryResult(corrected.canvas, corrected.detection)
+            : (() => {
+                const deskewed = deskewCanvasByTextLines(corrected.canvas, corrected.detection);
+                return enhanceCanvas(deskewed.canvas, renderMode, deskewed.detection);
+              })();
         const processedCanvas =
           renderMode === "report" ? buildAnalysisCanvas(sourceCanvas, enhanced.canvas, enhanced.edgeCanvas, enhanced.metrics) : enhanced.canvas;
         const outputMode = renderMode === "report" ? "report" : enhanced.metrics.selectedMode || renderMode;

@@ -672,6 +672,9 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("chooseAutoScanCandidate", html)
         self.assertIn("gray_preserves_fragile_text", html)
         self.assertIn("gray_preserves_broken_strokes", html)
+        self.assertIn("buildColorGeometryResult", html)
+        self.assertIn('renderMode === "color"', html)
+        self.assertIn("? buildColorGeometryResult(corrected.canvas, corrected.detection)", html)
         self.assertIn("selectedMode", html)
         self.assertIn("qualityScore", html)
         self.assertIn("assessOutputScanMetrics", html)
@@ -845,7 +848,7 @@ class PipelineTest(unittest.TestCase):
         worker = (ROOT / "src" / "clearscan_cv" / "static" / "sw.js").read_text(encoding="utf-8")
 
         self.assertIn("CACHE_NAME", worker)
-        self.assertIn("pocketcv-pdf-v20", worker)
+        self.assertIn("pocketcv-pdf-v21", worker)
         self.assertIn("install", worker)
         self.assertIn("fetch", worker)
         self.assertIn("event.request.mode === \"navigate\"", worker)

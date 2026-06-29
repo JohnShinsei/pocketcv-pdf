@@ -202,6 +202,8 @@ clearscan --ocr-status --ocr-lang jpn+eng
 
 Web 版の `おすすめ自動` は、白黒化で細い文字が欠ける場合に `文字欠けリスク` を検出し、可読性を優先してグレースキャンを選びます。白黒/エッジ出力のプレビュー画像は PNG として保持し、再圧縮による劣化を避けます。
 
+Web 版の `カラースキャン` は、四隅の切り出しと透視補正だけを行い、去影、シャープ化、二値化などの画像強調は適用しません。
+
 Python 版の OCR エンジンは任意依存です。軽量に試す場合は `.[ocr]` で Tesseract ラッパー、ONNX ベースの端末側 OCR を試す場合は `.[rapidocr]`、PaddleOCR を使う場合は `.[paddleocr]` を追加します。Tesseract を使う場合は、別途 Tesseract 本体と言語データも必要です。OCR 依存を入れていない環境でも、画像処理パイプラインはそのまま動作します。
 
 `--ocr-status` は、RapidOCR、Tesseract、PaddleOCR の Python パッケージ、Tesseract 実行ファイル、言語データの有無を JSON で表示します。
