@@ -1054,6 +1054,11 @@
         } else if (metrics.boldnessRisk > 0.28) {
           addIssue(2, "文字太り確認", "小文字を確認");
         }
+        if (metrics.brokenStrokeRisk > 0.52) {
+          addIssue(3, "文字欠け注意", "グレー保存/再撮影");
+        } else if (metrics.brokenStrokeRisk > 0.32) {
+          addIssue(2, "文字欠け確認", "細字を確認");
+        }
         if (metrics.paperGrayResidue > 0.08) {
           addIssue(2, "灰色残り", "再撮影/グレー保存");
         }
@@ -3421,6 +3426,55 @@
         return { shadowResidual, shadowScore, inkDensity, boldnessRisk, paperGrayResidue };
       }
 
+      function estimateBinaryFragmentMetrics(data, width, height) {
+        const step = Math.max(1, Math.floor(Math.max(width, height) / 1500));
+        let samples = 0;
+        let darkCount = 0;
+        let edgeDarkCount = 0;
+        let isolatedDarkCount = 0;
+
+        for (let y = step; y < height - step; y += step) {
+          for (let x = step; x < width - step; x += step) {
+            const index = (y * width + x) * 4;
+            const value = luminance(data[index], data[index + 1], data[index + 2]);
+            samples += 1;
+            if (value >= 128) {
+              continue;
+            }
+
+            darkCount += 1;
+            const left = ((y * width + (x - 1)) * 4);
+            const right = ((y * width + (x + 1)) * 4);
+            const top = (((y - 1) * width + x) * 4);
+            const bottom = (((y + 1) * width + x) * 4);
+            const neighbors = [
+              luminance(data[left], data[left + 1], data[left + 2]) < 128,
+              luminance(data[right], data[right + 1], data[right + 2]) < 128,
+              luminance(data[top], data[top + 1], data[top + 2]) < 128,
+              luminance(data[bottom], data[bottom + 1], data[bottom + 2]) < 128,
+            ];
+            const neighborDarkCount = neighbors.reduce((total, dark) => total + (dark ? 1 : 0), 0);
+            if (neighborDarkCount < neighbors.length) {
+              edgeDarkCount += 1;
+            }
+            if (neighborDarkCount <= 1) {
+              isolatedDarkCount += 1;
+            }
+          }
+        }
+
+        const sampledInkDensity = darkCount / Math.max(1, samples);
+        const fragmentEdgeRatio = edgeDarkCount / Math.max(1, darkCount);
+        const isolatedDarkRatio = isolatedDarkCount / Math.max(1, darkCount);
+        const sparseTextPenalty = sampledInkDensity < 0.09 ? clamp((0.09 - sampledInkDensity) / 0.06, 0, 1) * 0.22 : 0;
+        const brokenStrokeRisk = clamp(
+          (fragmentEdgeRatio - 0.48) / 0.24 + (isolatedDarkRatio - 0.08) / 0.28 + sparseTextPenalty,
+          0,
+          1
+        );
+        return { fragmentEdgeRatio, isolatedDarkRatio, brokenStrokeRisk };
+      }
+
       function qualityIssueLabel(advice) {
         return advice && advice.label ? advice.label : "出力OK";
       }
@@ -3433,10 +3487,18 @@
         const fragileBinary =
           binaryAdvice.label === "影ムラ強め" ||
           binaryAdvice.label === "文字太り注意" ||
+          binaryAdvice.label === "文字欠け注意" ||
           binaryAdvice.label === "再撮影推奨";
         const grayClearlyBetter = binaryAdvice.status !== "ready" && grayAdvice.status === "ready" && grayScore > binaryScore + 4;
+        const brokenBinary =
+          binaryCandidate.metrics.brokenStrokeRisk > 0.42 &&
+          binaryCandidate.metrics.fragmentEdgeRatio > 0.55 &&
+          binaryCandidate.metrics.inkDensity < 0.115;
         const chooseGray =
-          (fragileBinary && grayScore >= binaryScore - 8) || grayClearlyBetter || (binaryScore < 55 && grayScore > binaryScore + 4);
+          (fragileBinary && grayScore >= binaryScore - 8) ||
+          (brokenBinary && grayScore >= binaryScore - 22) ||
+          grayClearlyBetter ||
+          (binaryScore < 55 && grayScore > binaryScore + 4);
         const selected = chooseGray ? grayCandidate : binaryCandidate;
         selected.metrics.requestedMode = "auto";
         selected.metrics.selectedMode = chooseGray ? "gray" : "binary";
@@ -3446,7 +3508,7 @@
           grayScore,
           binaryAdvice: qualityIssueLabel(binaryAdvice),
           grayAdvice: qualityIssueLabel(grayAdvice),
-          reason: chooseGray ? "gray_preserves_fragile_text" : "binary_scan_is_readable",
+          reason: chooseGray ? (brokenBinary ? "gray_preserves_broken_strokes" : "gray_preserves_fragile_text") : "binary_scan_is_readable",
         };
         return selected;
       }
@@ -3684,12 +3746,18 @@
                   inkLum[pixel] > 54 &&
                   sharpened < 176;
               }
+              const weakTextEdge =
+                strokeContrast > 20 &&
+                inkLum[pixel] > 42 &&
+                sharpened < 208 &&
+                normalizedGradient > 32 &&
+                !(sharpened > 196 && strokeContrast < 28);
               const localInk =
-                !paperNoiseGuard && strokeContrast > 34 && inkLum[pixel] > 64 && sharpened < 186 && normalizedGradient > 19;
+                !paperNoiseGuard && strokeContrast > 30 && inkLum[pixel] > 56 && sharpened < 194 && normalizedGradient > 18;
               const textBody = inkLum[pixel] > 172 && strokeContrast > 38 && sharpened < 128;
               const textEdge = inkLum[pixel] > 118 && normalizedGradient > 78 && strokeContrast > 26 && sharpened < 166;
               const deepInk = normCenter < 44 && inkLum[pixel] > 132 && normalizedGradient > 24;
-              const inkPixel = sauvolaFine || sauvolaBroad || localInk || textBody || textEdge || deepInk;
+              const inkPixel = sauvolaFine || sauvolaBroad || weakTextEdge || localInk || textBody || textEdge || deepInk;
               const value = inkPixel && !antialiasGuard ? 0 : 255;
               data[index] = value;
               data[index + 1] = value;
@@ -3719,6 +3787,13 @@
         }
 
         const scanMetrics = assessOutputScanMetrics(data, sourceCanvas.width, sourceCanvas.height, tileSize);
+        const fragmentMetrics =
+          renderMode === "binary"
+            ? estimateBinaryFragmentMetrics(data, sourceCanvas.width, sourceCanvas.height)
+            : { fragmentEdgeRatio: 0, isolatedDarkRatio: 0, brokenStrokeRisk: 0 };
+        scanMetrics.fragmentEdgeRatio = fragmentMetrics.fragmentEdgeRatio;
+        scanMetrics.isolatedDarkRatio = fragmentMetrics.isolatedDarkRatio;
+        scanMetrics.brokenStrokeRisk = fragmentMetrics.brokenStrokeRisk;
         scanMetrics.strokeThinApplied = strokeThinReport.applied;
         scanMetrics.strokeThinInkBefore = strokeThinReport.beforeInkDensity;
         scanMetrics.strokeThinInkAfter = strokeThinReport.afterInkDensity;
@@ -3732,7 +3807,11 @@
           clamp(edgeCount / Math.max(1, pixelCount) / 0.16, 0, 1) * 28 +
           clamp((mean - 90) / 150, 0, 1) * 12;
         const qualityScore = clamp(
-          baseQuality - (1 - scanMetrics.shadowScore) * 10 - scanMetrics.boldnessRisk * 8 - scanMetrics.paperGrayResidue * 16,
+          baseQuality -
+            (1 - scanMetrics.shadowScore) * 10 -
+            scanMetrics.boldnessRisk * 8 -
+            scanMetrics.brokenStrokeRisk * 14 -
+            scanMetrics.paperGrayResidue * 16,
           0,
           100
         );
@@ -3755,6 +3834,9 @@
             shadowScore: scanMetrics.shadowScore,
             inkDensity: scanMetrics.inkDensity,
             boldnessRisk: scanMetrics.boldnessRisk,
+            brokenStrokeRisk: scanMetrics.brokenStrokeRisk,
+            fragmentEdgeRatio: scanMetrics.fragmentEdgeRatio,
+            isolatedDarkRatio: scanMetrics.isolatedDarkRatio,
             strokeThinApplied: scanMetrics.strokeThinApplied,
             strokeThinInkBefore: scanMetrics.strokeThinInkBefore,
             strokeThinInkAfter: scanMetrics.strokeThinInkAfter,
@@ -3818,6 +3900,7 @@
           ["影ムラ残り", `${Math.round((metrics.shadowResidual || 0) * 10) / 10}`],
           ["文字の墨量", `${Math.round((metrics.inkDensity || 0) * 1000) / 10}%`],
           ["加太りリスク", `${Math.round((metrics.boldnessRisk || 0) * 100)}%`],
+          ["文字欠けリスク", `${Math.round((metrics.brokenStrokeRisk || 0) * 100)}%`],
           ["筆画細化", metrics.strokeThinApplied ? "適用" : "未適用"],
           ["エッジ密度", `${Math.round(metrics.edgeDensity * 1000) / 10}%`],
           ["コントラスト", `${Math.round(metrics.contrast * 10) / 10}`],
@@ -3826,9 +3909,9 @@
 
         context.font = "700 21px 'Yu Gothic', 'Noto Sans JP', Arial, sans-serif";
         rows.forEach((row, index) => {
-          const y = 872 + index * 50;
+          const y = 872 + index * 43;
           context.fillStyle = index % 2 === 0 ? "#f6f8fb" : "#ffffff";
-          context.fillRect(626, y - 30, 510, 40);
+          context.fillRect(626, y - 27, 510, 35);
           context.fillStyle = "#687386";
           context.fillText(row[0], 648, y);
           context.fillStyle = "#157f72";
@@ -3852,7 +3935,9 @@
         const enhanced = enhanceCanvas(deskewed.canvas, renderMode, deskewed.detection);
         const processedCanvas =
           renderMode === "report" ? buildAnalysisCanvas(sourceCanvas, enhanced.canvas, enhanced.edgeCanvas, enhanced.metrics) : enhanced.canvas;
-        const processedBlob = await canvasToBlob(processedCanvas, "image/jpeg", 0.92);
+        const outputMode = renderMode === "report" ? "report" : enhanced.metrics.selectedMode || renderMode;
+        const previewType = outputMode === "binary" || outputMode === "edges" ? "image/png" : "image/jpeg";
+        const processedBlob = await canvasToBlob(processedCanvas, previewType, 0.92);
         return {
           sourceBlob,
           sourceCanvas,
@@ -3861,7 +3946,7 @@
           sourceOriginalWidth: Number(sourceCanvas.dataset.originalWidth || sourceCanvas.width),
           sourceOriginalHeight: Number(sourceCanvas.dataset.originalHeight || sourceCanvas.height),
           canvas: processedCanvas,
-          pdfMode: renderMode,
+          pdfMode: outputMode,
           metrics: enhanced.metrics,
           autoCorners: corrected.autoCorners || fallbackCorners(sourceCanvas),
           manualCorners: cloneCorners(manualCorners),
