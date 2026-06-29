@@ -21,6 +21,7 @@ from clearscan_cv.image_io import decode_image_bytes, read_exif_orientation  # n
 from clearscan_cv.pipeline import (  # noqa: E402
     MAX_PROCESS_IMAGE_EDGE,
     MAX_PROCESS_IMAGE_PIXELS,
+    _auto_mode_choice,
     deskew_by_text_lines,
     enhance_image,
     estimate_hough_textline_skew,
@@ -383,6 +384,13 @@ class PipelineTest(unittest.TestCase):
         self.assertGreater(result.image.shape[0], 100)
         self.assertGreater(result.image.shape[1], 100)
 
+    def test_pipeline_marks_dewarp_disabled_when_skipped(self) -> None:
+        result = enhance_image(make_synthetic_document(), mode="binary", auto_dewarp=False)
+
+        self.assertEqual(result.report["dewarp"]["method"], "disabled")  # type: ignore[index]
+        self.assertIn("textline_dewarp_disabled", result.report["pipeline"])
+        self.assertNotIn("textline_dewarp", result.report["pipeline"])
+
     def test_manual_corners_override_document_detection(self) -> None:
         manual_corners = [[180, 90], [790, 130], [725, 630], [125, 580]]
         result = enhance_image(make_synthetic_document(), mode="gray", manual_corners=manual_corners)
@@ -492,6 +500,24 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(result.report["auto_selection"]["selected_mode"], "gray")  # type: ignore[index]
         self.assertEqual(result.report["quality_diagnostics"]["status"], "ready")  # type: ignore[index]
         self.assertEqual(result.image.ndim, 2)
+
+    def test_auto_mode_prefers_gray_when_quality_margin_is_clear(self) -> None:
+        common = {
+            "shadow_residual": 0.0,
+            "shadow_score": 1.0,
+            "ink_density": 0.06,
+            "edge_density": 0.05,
+            "boldness_risk": 0.0,
+        }
+        selected, report = _auto_mode_choice(
+            {"score": 74.0, **common},
+            {"score": 82.0, **common},
+            perspective_confidence=0.9,
+        )
+
+        self.assertEqual(selected, "gray")
+        self.assertEqual(report["selected_mode"], "gray")
+        self.assertEqual(report["reason"], "gray_quality_margin")
 
     def test_external_restorer_hook_applies_between_geometry_and_enhancement(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -721,6 +747,8 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("chooseAutoScanCandidate", html)
         self.assertIn("gray_preserves_fragile_text", html)
         self.assertIn("gray_preserves_broken_strokes", html)
+        self.assertIn("grayQualityMargin", html)
+        self.assertIn("gray_quality_margin", html)
         self.assertIn("buildColorGeometryResult", html)
         self.assertIn('renderMode === "color"', html)
         self.assertIn("? buildColorGeometryResult(corrected.canvas, corrected.detection)", html)
@@ -908,7 +936,7 @@ class PipelineTest(unittest.TestCase):
         worker = (ROOT / "src" / "clearscan_cv" / "static" / "sw.js").read_text(encoding="utf-8")
 
         self.assertIn("CACHE_NAME", worker)
-        self.assertIn("pocketcv-pdf-v22", worker)
+        self.assertIn("pocketcv-pdf-v23", worker)
         self.assertIn("install", worker)
         self.assertIn("fetch", worker)
         self.assertIn("event.request.mode === \"navigate\"", worker)

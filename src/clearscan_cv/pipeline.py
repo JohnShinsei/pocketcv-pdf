@@ -305,19 +305,26 @@ def _auto_mode_choice(binary_quality: dict[str, object], gray_quality: dict[str,
     binary_issue_codes = _quality_issue_codes(binary_diagnostics)
     fragile_binary_codes = {"shadow_residual", "bold_text", "low_quality"}
     choose_gray = bool(binary_issue_codes & fragile_binary_codes) and gray_score >= binary_score - 8.0
+    gray_quality_margin = gray_diagnostics["status"] == "ready" and gray_score >= binary_score + 7.0
     if binary_diagnostics["status"] != "ready" and gray_diagnostics["status"] == "ready" and gray_score > binary_score + 4.0:
+        choose_gray = True
+    if gray_quality_margin:
         choose_gray = True
     if binary_score < 55.0 and gray_score > binary_score + 4.0:
         choose_gray = True
 
     selected = "gray" if choose_gray else "binary"
+    if selected == "gray":
+        reason = "gray_quality_margin" if gray_quality_margin else "gray_preserves_fragile_text"
+    else:
+        reason = "binary_scan_is_readable"
     return selected, {
         "selected_mode": selected,
         "binary_score": round(binary_score, 2),
         "gray_score": round(gray_score, 2),
         "binary_status": binary_diagnostics["status"],
         "gray_status": gray_diagnostics["status"],
-        "reason": "gray_preserves_fragile_text" if selected == "gray" else "binary_scan_is_readable",
+        "reason": reason,
     }
 
 
@@ -557,6 +564,10 @@ def _external_detector_pipeline_stage(report: dict[str, object], command: str | 
     return "external_detector" if report.get("applied") else "external_detector_fallback"
 
 
+def _dewarp_pipeline_stage(auto_dewarp: bool) -> str:
+    return "textline_dewarp" if auto_dewarp else "textline_dewarp_disabled"
+
+
 def enhance_image(
     image: np.ndarray,
     mode: OutputMode = "color",
@@ -709,7 +720,7 @@ def enhance_image(
             _external_detector_pipeline_stage(external_detector_report, external_detector_command),
             "document_detection",
             "perspective_correction",
-            "textline_dewarp",
+            _dewarp_pipeline_stage(auto_dewarp),
             "textline_deskew",
             "external_restorer" if external_restorer_command else "external_restorer_disabled",
             "template_guided_illumination" if template_image is not None else "template_guided_illumination_disabled",

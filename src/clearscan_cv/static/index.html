@@ -3757,21 +3757,30 @@
           binaryCandidate.metrics.brokenStrokeRisk > 0.42 &&
           binaryCandidate.metrics.fragmentEdgeRatio > 0.55 &&
           binaryCandidate.metrics.inkDensity < 0.115;
+        const grayQualityMargin = grayAdvice.status === "ready" && grayScore >= binaryScore + 7;
         const chooseGray =
           (fragileBinary && grayScore >= binaryScore - 8) ||
           (brokenBinary && grayScore >= binaryScore - 22) ||
           grayClearlyBetter ||
+          grayQualityMargin ||
           (binaryScore < 55 && grayScore > binaryScore + 4);
         const selected = chooseGray ? grayCandidate : binaryCandidate;
         selected.metrics.requestedMode = "auto";
         selected.metrics.selectedMode = chooseGray ? "gray" : "binary";
+        const reason = chooseGray
+          ? brokenBinary
+            ? "gray_preserves_broken_strokes"
+            : grayQualityMargin
+              ? "gray_quality_margin"
+              : "gray_preserves_fragile_text"
+          : "binary_scan_is_readable";
         selected.metrics.autoSelection = {
           selectedMode: selected.metrics.selectedMode,
           binaryScore,
           grayScore,
           binaryAdvice: qualityIssueLabel(binaryAdvice),
           grayAdvice: qualityIssueLabel(grayAdvice),
-          reason: chooseGray ? (brokenBinary ? "gray_preserves_broken_strokes" : "gray_preserves_fragile_text") : "binary_scan_is_readable",
+          reason,
         };
         return selected;
       }
