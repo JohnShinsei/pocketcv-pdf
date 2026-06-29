@@ -15,7 +15,7 @@ PocketCV PDF is a privacy-first mobile document scanner that captures or imports
 - Added a one-command demo runner that produces a processed scan image, comparison image, PDF, OCR backend diagnostics, readability metrics, and a consolidated JSON report for portfolio review.
 - Added multi-page CLI/API export that processes several document photos through the OpenCV pipeline and combines them into A4 scan PDFs, searchable OCR PDFs, Markdown, DOCX, and batch JSON reports.
 - Implemented quality metrics and diagnostics such as Laplacian sharpness, contrast, edge density, exposure balance, shadow residual, ink density, boldness risk, score deltas, and retake/review recommendations to make image enhancement measurable.
-- Added guarded stroke-thinning post-processing for dense binary scans, reducing overbold text while preserving small characters, punctuation, and edge density.
+- Added guarded stroke-thinning post-processing in both the browser and Python pipelines for dense binary scans, reducing overbold text while preserving small characters, punctuation, and edge density.
 - Added browser-side Tesseract.js OCR over the enhanced scan output with copy, TXT/DOCX export, and hidden-text searchable PDF generation, structured as the second stage before document layout recovery.
 - Implemented Python-side optional OCR adapters for RapidOCR, Tesseract, and PaddleOCR, normalizing output into line/word bounding boxes and confidence scores.
 - Added manual corner overrides across the Python pipeline, CLI, and API so difficult phone photos can be reproducibly rectified when automatic page detection is imperfect.

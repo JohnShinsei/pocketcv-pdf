@@ -3198,6 +3198,182 @@
         }
       }
 
+      function imageDataToBinaryMask(data, width, height) {
+        const pixelCount = width * height;
+        const mask = new Uint8Array(pixelCount);
+        for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+          mask[pixel] = data[pixel * 4] <= 128 ? 1 : 0;
+        }
+        return mask;
+      }
+
+      function buildFragileBinaryComponentMask(mask, width, height) {
+        const pixelCount = width * height;
+        const visited = new Uint8Array(pixelCount);
+        const preserved = new Uint8Array(pixelCount);
+        const queue = new Int32Array(pixelCount);
+        const smallAreaLimit = Math.max(18, Math.round(pixelCount * 0.000045));
+
+        for (let start = 0; start < pixelCount; start += 1) {
+          if (visited[start] || !mask[start]) {
+            continue;
+          }
+
+          let head = 0;
+          let tail = 0;
+          let minX = width;
+          let minY = height;
+          let maxX = 0;
+          let maxY = 0;
+          visited[start] = 1;
+          queue[tail] = start;
+          tail += 1;
+
+          while (head < tail) {
+            const pixel = queue[head];
+            head += 1;
+            const x = pixel % width;
+            const y = Math.floor(pixel / width);
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+
+            for (let dy = -1; dy <= 1; dy += 1) {
+              const nextY = y + dy;
+              if (nextY < 0 || nextY >= height) {
+                continue;
+              }
+              for (let dx = -1; dx <= 1; dx += 1) {
+                if (dx === 0 && dy === 0) {
+                  continue;
+                }
+                const nextX = x + dx;
+                if (nextX < 0 || nextX >= width) {
+                  continue;
+                }
+                const nextPixel = nextY * width + nextX;
+                if (!visited[nextPixel] && mask[nextPixel]) {
+                  visited[nextPixel] = 1;
+                  queue[tail] = nextPixel;
+                  tail += 1;
+                }
+              }
+            }
+          }
+
+          const boxWidth = maxX - minX + 1;
+          const boxHeight = maxY - minY + 1;
+          const area = tail;
+          const keepFragile =
+            area <= smallAreaLimit ||
+            Math.min(boxWidth, boxHeight) <= 2 ||
+            (area <= smallAreaLimit * 2 && Math.max(boxWidth, boxHeight) <= 14);
+          if (keepFragile) {
+            for (let index = 0; index < tail; index += 1) {
+              preserved[queue[index]] = 1;
+            }
+          }
+        }
+        return preserved;
+      }
+
+      function erodeBinaryMask3x3(mask, width, height) {
+        const eroded = new Uint8Array(mask.length);
+        for (let y = 1; y < height - 1; y += 1) {
+          for (let x = 1; x < width - 1; x += 1) {
+            const pixel = y * width + x;
+            if (
+              mask[pixel] &&
+              mask[pixel - width - 1] &&
+              mask[pixel - width] &&
+              mask[pixel - width + 1] &&
+              mask[pixel - 1] &&
+              mask[pixel + 1] &&
+              mask[pixel + width - 1] &&
+              mask[pixel + width] &&
+              mask[pixel + width + 1]
+            ) {
+              eroded[pixel] = 1;
+            }
+          }
+        }
+        return eroded;
+      }
+
+      function binaryMaskInkDensity(mask) {
+        let darkCount = 0;
+        for (let index = 0; index < mask.length; index += 1) {
+          darkCount += mask[index];
+        }
+        return darkCount / Math.max(1, mask.length);
+      }
+
+      function binaryMaskEdgeDensity(mask, width, height) {
+        const step = Math.max(1, Math.floor(Math.max(width, height) / 1400));
+        let edgeCount = 0;
+        let samples = 0;
+        for (let y = step; y < height - step; y += step) {
+          for (let x = step; x < width - step; x += step) {
+            const pixel = y * width + x;
+            samples += 1;
+            if (
+              mask[pixel] &&
+              (!mask[pixel - 1] || !mask[pixel + 1] || !mask[pixel - width] || !mask[pixel + width])
+            ) {
+              edgeCount += 1;
+            }
+          }
+        }
+        return edgeCount / Math.max(1, samples);
+      }
+
+      function applyBinaryMaskToImageData(data, mask) {
+        for (let pixel = 0; pixel < mask.length; pixel += 1) {
+          const value = mask[pixel] ? 0 : 255;
+          const offset = pixel * 4;
+          data[offset] = value;
+          data[offset + 1] = value;
+          data[offset + 2] = value;
+          data[offset + 3] = 255;
+        }
+      }
+
+      function reduceOverboldBinaryStrokes(data, width, height, tileSize) {
+        const before = assessOutputScanMetrics(data, width, height, tileSize);
+        if (before.inkDensity < 0.105 && before.boldnessRisk < 0.28) {
+          return { applied: false, beforeInkDensity: before.inkDensity, afterInkDensity: before.inkDensity };
+        }
+
+        const sourceMask = imageDataToBinaryMask(data, width, height);
+        const fragileMask = buildFragileBinaryComponentMask(sourceMask, width, height);
+        const eroded = erodeBinaryMask3x3(sourceMask, width, height);
+        for (let index = 0; index < eroded.length; index += 1) {
+          eroded[index] = eroded[index] || fragileMask[index] ? 1 : 0;
+        }
+
+        const candidateInk = binaryMaskInkDensity(eroded);
+        const beforeEdgeDensity = binaryMaskEdgeDensity(sourceMask, width, height);
+        const candidateEdgeDensity = binaryMaskEdgeDensity(eroded, width, height);
+        const candidateBoldnessRisk = clamp((candidateInk - 0.085) / 0.095, 0, 1);
+        const tooThin = candidateInk < Math.max(0.012, before.inkDensity * 0.42);
+        const losesEdges = candidateEdgeDensity < beforeEdgeDensity * 0.52;
+        const barelyChanged = candidateInk >= before.inkDensity * 0.94;
+        const improvesBoldness = candidateBoldnessRisk <= Math.max(0.2, before.boldnessRisk - 0.08) || candidateInk < 0.12;
+        if (tooThin || losesEdges || barelyChanged || !improvesBoldness) {
+          return { applied: false, beforeInkDensity: before.inkDensity, afterInkDensity: before.inkDensity };
+        }
+
+        applyBinaryMaskToImageData(data, eroded);
+        return {
+          applied: true,
+          beforeInkDensity: before.inkDensity,
+          afterInkDensity: candidateInk,
+          beforeEdgeDensity,
+          afterEdgeDensity: candidateEdgeDensity,
+        };
+      }
+
       function assessOutputScanMetrics(data, width, height, tileSize) {
         const gridWidth = Math.ceil(width / tileSize);
         const gridHeight = Math.ceil(height / tileSize);
@@ -3536,11 +3712,16 @@
           }
         }
 
+        let strokeThinReport = { applied: false, beforeInkDensity: null, afterInkDensity: null };
         if (renderMode === "binary") {
           cleanupBinaryImageData(data, sourceCanvas.width, sourceCanvas.height);
+          strokeThinReport = reduceOverboldBinaryStrokes(data, sourceCanvas.width, sourceCanvas.height, tileSize);
         }
 
         const scanMetrics = assessOutputScanMetrics(data, sourceCanvas.width, sourceCanvas.height, tileSize);
+        scanMetrics.strokeThinApplied = strokeThinReport.applied;
+        scanMetrics.strokeThinInkBefore = strokeThinReport.beforeInkDensity;
+        scanMetrics.strokeThinInkAfter = strokeThinReport.afterInkDensity;
         outputContext.putImageData(image, 0, 0);
         edgeContext.putImageData(edgeImage, 0, 0);
         const mean = sum / Math.max(1, pixelCount);
@@ -3574,6 +3755,9 @@
             shadowScore: scanMetrics.shadowScore,
             inkDensity: scanMetrics.inkDensity,
             boldnessRisk: scanMetrics.boldnessRisk,
+            strokeThinApplied: scanMetrics.strokeThinApplied,
+            strokeThinInkBefore: scanMetrics.strokeThinInkBefore,
+            strokeThinInkAfter: scanMetrics.strokeThinInkAfter,
             paperGrayResidue: scanMetrics.paperGrayResidue,
             requestedMode: mode,
             selectedMode: renderMode,
@@ -3634,6 +3818,7 @@
           ["影ムラ残り", `${Math.round((metrics.shadowResidual || 0) * 10) / 10}`],
           ["文字の墨量", `${Math.round((metrics.inkDensity || 0) * 1000) / 10}%`],
           ["加太りリスク", `${Math.round((metrics.boldnessRisk || 0) * 100)}%`],
+          ["筆画細化", metrics.strokeThinApplied ? "適用" : "未適用"],
           ["エッジ密度", `${Math.round(metrics.edgeDensity * 1000) / 10}%`],
           ["コントラスト", `${Math.round(metrics.contrast * 10) / 10}`],
           ["二値化しきい値", `${metrics.threshold}`],
