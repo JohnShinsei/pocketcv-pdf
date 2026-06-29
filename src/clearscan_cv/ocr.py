@@ -387,6 +387,41 @@ def _has_two_columns(lines: list[OcrLine], page_width: int) -> bool:
     return left >= 3 and right >= 3
 
 
+def _is_full_width_layout_line(line: OcrLine, page_width: int) -> bool:
+    if page_width <= 0:
+        return False
+    left = line.bbox[0]
+    right = line.bbox[0] + line.bbox[2]
+    center_x = left + line.bbox[2] / 2.0
+    centered = abs(center_x - page_width / 2.0) < page_width * 0.22
+    wide = line.bbox[2] > page_width * 0.52
+    spans_columns = left < page_width * 0.22 and right > page_width * 0.78
+    return centered or wide or spans_columns
+
+
+def _two_column_reading_order(lines: list[OcrLine], page_width: int, median_height: float) -> list[OcrLine]:
+    full_width_lines = [line for line in lines if _is_full_width_layout_line(line, page_width)]
+    full_width_ids = {id(line) for line in full_width_lines}
+    column_lines = [line for line in lines if id(line) not in full_width_ids]
+    ordered: list[OcrLine] = []
+    remaining = list(column_lines)
+
+    def sort_columns(items: list[OcrLine]) -> list[OcrLine]:
+        return sorted(items, key=lambda line: (_column_for_line(line, page_width, True), line.bbox[1], line.bbox[0]))
+
+    for full_width_line in sorted(full_width_lines, key=lambda line: (line.bbox[1], line.bbox[0])):
+        cutoff_y = full_width_line.bbox[1] - median_height * 0.55
+        before = [line for line in remaining if line.bbox[1] < cutoff_y]
+        if before:
+            ordered.extend(sort_columns(before))
+            before_ids = {id(line) for line in before}
+            remaining = [line for line in remaining if id(line) not in before_ids]
+        ordered.append(full_width_line)
+
+    ordered.extend(sort_columns(remaining))
+    return ordered
+
+
 def recover_layout_markdown(result: OcrResult) -> str:
     lines = [line for line in result.lines if line.text]
     if not lines:
@@ -395,7 +430,11 @@ def recover_layout_markdown(result: OcrResult) -> str:
     heights = [max(1, line.bbox[3]) for line in lines]
     median_height = float(np.median(heights)) if heights else 12.0
     two_columns = _has_two_columns(lines, result.width)
-    ordered = sorted(lines, key=lambda line: (_column_for_line(line, result.width, two_columns), line.bbox[1], line.bbox[0]))
+    ordered = (
+        _two_column_reading_order(lines, result.width, median_height)
+        if two_columns
+        else sorted(lines, key=lambda line: (line.bbox[1], line.bbox[0]))
+    )
 
     paragraphs: list[str] = []
     current = ""
@@ -403,9 +442,10 @@ def recover_layout_markdown(result: OcrResult) -> str:
     previous_column = 0
 
     for line in ordered:
-        column = _column_for_line(line, result.width, two_columns)
+        full_width_line = two_columns and _is_full_width_layout_line(line, result.width)
+        column = -1 if full_width_line else _column_for_line(line, result.width, two_columns)
         centered = abs((line.bbox[0] + line.bbox[2] / 2.0) - result.width / 2.0) < result.width * 0.18
-        is_heading = len(line.text) <= 42 and (line.bbox[3] > median_height * 1.25 or centered)
+        is_heading = len(line.text) <= 42 and (line.bbox[3] > median_height * 1.25 or centered or full_width_line)
         gap = 0.0 if previous_line is None else line.bbox[1] - (previous_line.bbox[1] + previous_line.bbox[3])
         starts_new = previous_line is None or column != previous_column or gap > median_height * 1.35 or is_heading
 

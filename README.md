@@ -35,6 +35,7 @@ PWA の Service Worker は新しい処理ロジックを検出しやすいよう
 - DocShadow / DocScanner / DocTr++ などのローカル推論を接続できる外部復元コマンド hook
 - Tesseract.js によるブラウザ内 OCR、OCR 結果のコピー、TXT / DOCX 保存、PDF への非表示文字層埋め込み
 - OCR の行座標から左右カラム、見出し、段落を推定する Markdown / DOCX 文書復元
+- 二段組み文書では、中央タイトルや全幅見出しを本文カラムより先に保つ読み順復元
 - グレースケール化、二値化、エッジマップ生成
 - 透視補正信頼度、エッジ密度、コントラスト、二値化しきい値の算出
 - 処理後のスキャン画像を PNG と A4 PDF として保存し、OCR 実行後は searchable PDF として出力

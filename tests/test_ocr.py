@@ -72,6 +72,24 @@ class OcrTest(unittest.TestCase):
         self.assertIn("Left first line Left second line Left third line", markdown)
         self.assertIn("Right first line Right second line Right third line", markdown)
 
+    def test_recover_layout_markdown_keeps_centered_title_before_columns(self) -> None:
+        lines = [
+            OcrLine("Centered Title", 98.0, (274, 24, 150, 32)),
+            OcrLine("Left first", 90.0, (40, 100, 210, 20)),
+            OcrLine("Left second", 90.0, (42, 132, 230, 20)),
+            OcrLine("Left third", 90.0, (44, 164, 220, 20)),
+            OcrLine("Right first", 88.0, (360, 100, 230, 20)),
+            OcrLine("Right second", 88.0, (362, 132, 235, 20)),
+            OcrLine("Right third", 88.0, (364, 164, 220, 20)),
+        ]
+        result = OcrResult(engine="fake", language="eng", text="", confidence=91.0, width=640, height=900, lines=lines)
+
+        markdown = recover_layout_markdown(result)
+
+        self.assertTrue(markdown.startswith("## Centered Title"))
+        self.assertLess(markdown.index("Centered Title"), markdown.index("Left first"))
+        self.assertLess(markdown.index("Left first"), markdown.index("Right first"))
+
     def test_cli_reports_missing_requested_ocr_engine_without_breaking_scan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

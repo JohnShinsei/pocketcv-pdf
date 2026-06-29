@@ -1567,8 +1567,7 @@
           const right = [];
           sorted.forEach((line) => {
             const center = (line.bbox.x0 + line.bbox.x1) / 2;
-            const boxWidth = line.bbox.x1 - line.bbox.x0;
-            if (boxWidth > width * 0.82 && line.text.length <= 80) {
+            if (isFullWidthLayoutLine(line, width) && line.text.length <= 80) {
               full.push(line);
             } else if (center < split) {
               left.push(line);
@@ -1615,6 +1614,17 @@
         return buildSections(split, 3) || buildSections(width / 2, 6) || { type: "single", sections: [{ title: "本文", lines: sorted }] };
       }
 
+      function isFullWidthLayoutLine(line, pageWidth) {
+        const left = line.bbox.x0;
+        const right = line.bbox.x1;
+        const boxWidth = right - left;
+        const center = (left + right) / 2;
+        const centered = Math.abs(center - pageWidth / 2) < pageWidth * 0.22;
+        const wide = boxWidth > pageWidth * 0.52;
+        const spansColumns = left < pageWidth * 0.22 && right > pageWidth * 0.78;
+        return centered || wide || spansColumns;
+      }
+
       function shouldJoinWithoutSpace(left, right) {
         return /[\u3040-\u30ff\u3400-\u9fff]$/.test(left) || /^[\u3040-\u30ff\u3400-\u9fff]/.test(right);
       }
@@ -1632,7 +1642,7 @@
         const short = text.length <= 32;
         const sentenceLike = /[。.!?！？]$/.test(text);
         const labelLike = /^[A-Za-z0-9０-９一-龥ぁ-んァ-ン\s()（）/・:+-]+$/.test(text);
-        return short && !sentenceLike && labelLike && height > medianHeight * 1.24;
+        return short && !sentenceLike && labelLike && (height > medianHeight * 1.24 || isFullWidthLayoutLine(line, pageWidth));
       }
 
       function markdownLineText(text) {

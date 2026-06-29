@@ -802,6 +802,7 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("文書復元", html)
         self.assertIn("recoverLayoutMarkdown", html)
         self.assertIn("detectColumnLayout", html)
+        self.assertIn("isFullWidthLayoutLine", html)
         self.assertIn("downloadLayoutText", html)
         self.assertIn("downloadDocxDocument", html)
         self.assertIn("buildDocxBytes", html)
@@ -940,7 +941,7 @@ class PipelineTest(unittest.TestCase):
         worker = (ROOT / "src" / "clearscan_cv" / "static" / "sw.js").read_text(encoding="utf-8")
 
         self.assertIn("CACHE_NAME", worker)
-        self.assertIn("pocketcv-pdf-v24", worker)
+        self.assertIn("pocketcv-pdf-v25", worker)
         self.assertIn("install", worker)
         self.assertIn("fetch", worker)
         self.assertIn("event.request.mode === \"navigate\"", worker)
