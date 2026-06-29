@@ -21,6 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=["auto", "color", "gray", "binary"], default="auto", help="Output style.")
     parser.add_argument("--no-warp", action="store_true", help="Disable automatic perspective correction.")
     parser.add_argument("--no-dewarp", action="store_true", help="Disable lightweight textline dewarping.")
+    parser.add_argument("--template-image", help="Optional ideal form/template image for template-guided illumination correction.")
     parser.add_argument(
         "--external-restorer-command",
         help="Trusted local command for an optional deep restoration stage. Use {input} and {output} placeholders.",
@@ -99,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
                 auto_dewarp=not args.no_dewarp,
                 side_by_side=args.compare,
                 output_stem=output_stem,
+                template_path=args.template_image,
                 external_restorer_command=args.external_restorer_command,
                 external_restorer_timeout=args.external_restorer_timeout,
             )
@@ -184,6 +186,7 @@ def main(argv: list[str] | None = None) -> int:
         side_by_side=args.compare,
         manual_corners=manual_corners,
         manual_corners_space=args.corners_space,
+        template_path=args.template_image,
         external_restorer_command=args.external_restorer_command,
         external_restorer_timeout=args.external_restorer_timeout,
     )

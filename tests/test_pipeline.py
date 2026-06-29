@@ -197,6 +197,30 @@ def make_near_edge_artifact_page() -> np.ndarray:
     return image
 
 
+def make_clean_form_template() -> np.ndarray:
+    image = np.full((620, 820, 3), 248, dtype=np.uint8)
+    cv2.rectangle(image, (54, 48), (766, 568), (230, 230, 230), 2)
+    cv2.putText(image, "FORM TEMPLATE", (230, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (65, 65, 65), 2, cv2.LINE_AA)
+    for row in range(6):
+        y = 145 + row * 62
+        cv2.line(image, (90, y), (720, y), (120, 120, 120), 1, cv2.LINE_AA)
+        cv2.rectangle(image, (90, y + 16), (210, y + 40), (120, 120, 120), 1)
+        cv2.line(image, (240, y + 32), (700, y + 32), (150, 150, 150), 1, cv2.LINE_AA)
+    return image
+
+
+def make_shadowed_form_photo() -> np.ndarray:
+    template = make_clean_form_template()
+    gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    height, width = gray.shape[:2]
+    gradient = np.linspace(0, 58, width, dtype=np.float32)[None, :]
+    shadow = np.zeros((height, width), dtype=np.float32)
+    cv2.ellipse(shadow, (width - 240, 240), (260, 190), -10, 0, 360, 52, -1, cv2.LINE_AA)
+    shadow = cv2.GaussianBlur(shadow + gradient, (151, 151), 0)
+    shaded = np.clip(gray - shadow, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(shaded, cv2.COLOR_GRAY2BGR)
+
+
 def make_external_restorer_command(script_path: Path, *, should_fail: bool = False) -> str:
     if should_fail:
         script_path.write_text("import sys\nsys.exit(7)\n", encoding="utf-8")
@@ -408,6 +432,30 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(report["reason"], "nonzero_exit")  # type: ignore[index]
         self.assertEqual(report["returncode"], 7)  # type: ignore[index]
         self.assertGreater(result.image.shape[0], 100)
+
+    def test_template_guided_illumination_uses_form_template(self) -> None:
+        template = make_clean_form_template()
+        page = make_shadowed_form_photo()
+        result = enhance_image(page, mode="gray", auto_warp=False, auto_dewarp=False, template_image=template)
+
+        report = result.report["template_guided_illumination"]
+        self.assertTrue(report["applied"])  # type: ignore[index]
+        self.assertEqual(report["method"], "template_guided_illumination")  # type: ignore[index]
+        self.assertIn("template_guided_illumination", result.report["pipeline"])
+        self.assertLess(float(report["corrected_background_range"]), float(report["source_background_range"]) * 0.7)  # type: ignore[index]
+
+    def test_process_file_accepts_template_image_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_path = tmp_path / "form.jpg"
+            template_path = tmp_path / "template.png"
+            cv2.imwrite(str(input_path), make_shadowed_form_photo())
+            cv2.imwrite(str(template_path), make_clean_form_template())
+
+            report = process_file(input_path, tmp_path / "out", mode="gray", auto_dewarp=False, template_path=template_path)
+
+            self.assertEqual(report["template_path"], str(template_path))
+            self.assertTrue(report["template_guided_illumination"]["applied"])  # type: ignore[index]
 
     def test_quality_metrics_report_shadow_and_boldness_risk(self) -> None:
         page = make_heavy_shadow_page()

@@ -67,6 +67,7 @@ def ocr_status(language: str = "jpn+eng") -> dict[str, object]:
 @app.post("/api/process")
 async def process_upload(
     file: UploadFile = File(...),
+    template_file: UploadFile | None = File(None),
     mode: str = Form("auto"),
     auto_warp: bool = Form(True),
     auto_dewarp: bool = Form(True),
@@ -83,6 +84,7 @@ async def process_upload(
 ) -> dict[str, object]:
     data = await file.read()
     image = _decode_image(data)
+    template_image = _decode_image(await template_file.read()) if template_file is not None else None
     if corners and not auto_warp:
         raise HTTPException(status_code=400, detail="corners cannot be combined with auto_warp=false")
     if corners_space not in {"input", "processed"}:
@@ -100,6 +102,7 @@ async def process_upload(
             auto_dewarp=auto_dewarp,
             manual_corners=manual_corners,
             manual_corners_space=corners_space,  # type: ignore[arg-type]
+            template_image=template_image,
         )  # type: ignore[arg-type]
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -139,6 +142,7 @@ async def process_upload(
 @app.post("/api/process-batch")
 async def process_batch_upload(
     files: list[UploadFile] = File(...),
+    template_file: UploadFile | None = File(None),
     mode: str = Form("auto"),
     auto_warp: bool = Form(True),
     auto_dewarp: bool = Form(True),
@@ -158,6 +162,7 @@ async def process_batch_upload(
     processed_images: list[np.ndarray] = []
     ocr_results = []
     layout_pages: list[str] = []
+    template_image = _decode_image(await template_file.read()) if template_file is not None else None
     for index, file in enumerate(files, start=1):
         image = _decode_image(await file.read())
         try:
@@ -166,6 +171,7 @@ async def process_batch_upload(
                 mode=mode,
                 auto_warp=auto_warp,
                 auto_dewarp=auto_dewarp,
+                template_image=template_image,
             )  # type: ignore[arg-type]
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"{file.filename or f'page-{index}'}: {exc}") from exc

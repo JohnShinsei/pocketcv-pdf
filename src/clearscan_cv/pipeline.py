@@ -343,6 +343,42 @@ def normalize_illumination(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
 
 
+def template_guided_illumination(image: np.ndarray, template: np.ndarray | None) -> tuple[np.ndarray, dict[str, object]]:
+    if template is None:
+        return image, {"applied": False, "method": "disabled"}
+
+    bgr = ensure_bgr(image)
+    template_bgr = ensure_bgr(template)
+    if min(template_bgr.shape[:2]) < 40:
+        return image, {"applied": False, "method": "template_guided_illumination", "reason": "template_too_small"}
+
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+    lightness, channel_a, channel_b = cv2.split(lab)
+    resized_template = cv2.resize(template_bgr, (bgr.shape[1], bgr.shape[0]), interpolation=cv2.INTER_AREA)
+    template_lightness = cv2.cvtColor(resized_template, cv2.COLOR_BGR2LAB)[:, :, 0]
+    source_background = estimate_shadow_illumination(lightness)
+    template_background = estimate_shadow_illumination(template_lightness)
+    source_range = float(np.percentile(source_background, 95) - np.percentile(source_background, 5))
+    template_range = float(np.percentile(template_background, 95) - np.percentile(template_background, 5))
+
+    target_background = np.clip(template_background.astype(np.float32), 180.0, 252.0)
+    normalized = cv2.divide(lightness, np.maximum(source_background, 1), scale=1.0).astype(np.float32) * target_background
+    corrected = np.clip(normalized, 0, 255).astype(np.uint8)
+    corrected = preserve_high_frequency_detail(lightness, corrected, amount=0.2)
+    corrected_background = estimate_shadow_illumination(corrected)
+    corrected_range = float(np.percentile(corrected_background, 95) - np.percentile(corrected_background, 5))
+    merged = cv2.merge((corrected, channel_a, channel_b))
+    report = {
+        "applied": True,
+        "method": "template_guided_illumination",
+        "template_size": {"width": int(template_bgr.shape[1]), "height": int(template_bgr.shape[0])},
+        "source_background_range": round(source_range, 2),
+        "template_background_range": round(template_range, 2),
+        "corrected_background_range": round(corrected_range, 2),
+    }
+    return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR), report
+
+
 def to_clean_binary(image: np.ndarray) -> np.ndarray:
     bgr = ensure_bgr(image)
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
@@ -460,6 +496,7 @@ def enhance_image(
     auto_dewarp: bool = True,
     manual_corners: CornerPoints | None = None,
     manual_corners_space: CornerCoordinateSpace = "input",
+    template_image: np.ndarray | None = None,
     external_restorer_command: str | None = None,
     external_restorer_timeout: float = 180.0,
 ) -> EnhancementResult:
@@ -492,6 +529,8 @@ def enhance_image(
         timeout_seconds=external_restorer_timeout,
     )
     restored = external_result.image
+    templated, template_report = template_guided_illumination(restored, template_image)
+    restored = templated
     enhanced = normalize_illumination(restored)
 
     selected_mode = mode
@@ -525,6 +564,7 @@ def enhance_image(
         "dewarp": dewarp_result.report if dewarp_result is not None else {"applied": False, "method": "disabled"},
         "deskew": deskew_report,
         "external_restorer": external_result.report,
+        "template_guided_illumination": template_report,
         "quality": compare_quality(deskewed, quality_after),
         "output_quality": output_quality,
         "quality_diagnostics": diagnose_scan_quality(
@@ -537,6 +577,7 @@ def enhance_image(
             "textline_dewarp",
             "textline_deskew",
             "external_restorer" if external_restorer_command else "external_restorer_disabled",
+            "template_guided_illumination" if template_image is not None else "template_guided_illumination_disabled",
             "illumination_normalization",
             selected_mode,
         ],
@@ -554,6 +595,7 @@ def process_file(
     manual_corners: CornerPoints | None = None,
     manual_corners_space: CornerCoordinateSpace = "input",
     output_stem: str | None = None,
+    template_path: str | Path | None = None,
     external_restorer_command: str | None = None,
     external_restorer_timeout: float = 180.0,
 ) -> dict[str, object]:
@@ -565,6 +607,12 @@ def process_file(
     image = cv2.imdecode(raw, cv2.IMREAD_COLOR)
     if image is None:
         raise FileNotFoundError(f"Could not read image: {input_path}")
+    template_image = None
+    if template_path is not None:
+        raw_template = np.fromfile(str(template_path), dtype=np.uint8)
+        template_image = cv2.imdecode(raw_template, cv2.IMREAD_COLOR)
+        if template_image is None:
+            raise FileNotFoundError(f"Could not read template image: {template_path}")
 
     result = enhance_image(
         image,
@@ -573,6 +621,7 @@ def process_file(
         auto_dewarp=auto_dewarp,
         manual_corners=manual_corners,
         manual_corners_space=manual_corners_space,
+        template_image=template_image,
         external_restorer_command=external_restorer_command,
         external_restorer_timeout=external_restorer_timeout,
     )
@@ -583,6 +632,7 @@ def process_file(
 
     report = {
         "input_path": str(input_path),
+        "template_path": str(template_path) if template_path is not None else None,
         "output_path": str(output_path),
         "report_path": str(report_path),
         **result.report,

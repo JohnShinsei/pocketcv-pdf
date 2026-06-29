@@ -23,6 +23,7 @@ PocketCV PDF is a privacy-first mobile document scanner that captures or imports
 - Added searchable PDF export with hidden OCR text layers plus OCR readability metrics such as confidence, edit distance, CER, and textline horizontal score.
 - Added an auto scan mode that compares binary and grayscale candidates using artifact diagnostics, then selects the more reliable output for OCR/PDF export.
 - Added a fallback-safe external restoration hook for connecting local DocShadow/DocScanner/DocTr++ style inference commands before the traditional OpenCV enhancement stage.
+- Added template-guided illumination correction for fixed forms and invoices, using an ideal template image to stabilize paper lighting before OCR/export.
 
 ## Interview talking points
 

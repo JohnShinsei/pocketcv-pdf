@@ -42,6 +42,19 @@ def make_api_document() -> bytes:
     return encoded.tobytes()
 
 
+def make_api_template() -> bytes:
+    image = np.full((420, 620, 3), 248, dtype=np.uint8)
+    cv2.rectangle(image, (74, 42), (548, 374), (180, 180, 180), 2)
+    cv2.putText(image, "API TEMPLATE", (145, 118), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (70, 70, 70), 2, cv2.LINE_AA)
+    for index in range(7):
+        y = 166 + index * 28
+        cv2.line(image, (126, y), (480, y), (120, 120, 120), 1, cv2.LINE_AA)
+    ok, encoded = cv2.imencode(".png", image)
+    if not ok:
+        raise RuntimeError("Could not encode test template")
+    return encoded.tobytes()
+
+
 @unittest.skipUnless(HAS_API_DEPS, "Install API dependencies with: pip install -e .[api]")
 class ApiTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -85,6 +98,24 @@ class ApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("corners_space", response.json()["detail"])
+
+    def test_process_endpoint_accepts_template_file(self) -> None:
+        response = self.client.post(
+            "/api/process",
+            files={
+                "file": ("api-input.jpg", make_api_document(), "image/jpeg"),
+                "template_file": ("template.png", make_api_template(), "image/png"),
+            },
+            data={
+                "mode": "gray",
+                "readability": "true",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertTrue(payload["report"]["template_guided_illumination"]["applied"])
+        self.assertEqual(payload["report"]["template_guided_illumination"]["method"], "template_guided_illumination")
 
     def test_process_batch_endpoint_returns_multi_page_pdf(self) -> None:
         first = make_api_document()

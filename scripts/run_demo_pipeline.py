@@ -39,6 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-pdf", action="store_true", help="Skip image-only PDF export.")
     parser.add_argument("--no-dewarp", action="store_true", help="Disable lightweight textline dewarping.")
     parser.add_argument("--no-warp", action="store_true", help="Disable automatic perspective correction.")
+    parser.add_argument("--template-image", help="Optional ideal form/template image for template-guided illumination correction.")
     parser.add_argument(
         "--external-restorer-command",
         help="Trusted local command for an optional deep restoration stage. Use {input} and {output} placeholders.",
@@ -125,6 +126,7 @@ def run_demo(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         side_by_side=True,
         manual_corners=manual_corners,
         manual_corners_space=args.corners_space,
+        template_path=args.template_image,
         external_restorer_command=args.external_restorer_command,
         external_restorer_timeout=args.external_restorer_timeout,
     )
@@ -152,6 +154,7 @@ def run_demo(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "dewarp": scan_report.get("dewarp"),
         "deskew": scan_report.get("deskew"),
         "external_restorer": scan_report.get("external_restorer"),
+        "template_guided_illumination": scan_report.get("template_guided_illumination"),
         "quality": scan_report.get("quality"),
         "output_quality": scan_report.get("output_quality"),
         "quality_diagnostics": scan_report.get("quality_diagnostics"),
