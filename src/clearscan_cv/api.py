@@ -6,6 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .corners import parse_corner_points
 from .evaluation import evaluate_readability
 from .export import build_docx_bytes, build_pdf_bytes
 from .ocr import OcrUnavailableError, ocr_engine_status, recognize_image, recover_layout_markdown
@@ -60,7 +61,10 @@ def ocr_status(language: str = "jpn+eng") -> dict[str, object]:
 async def process_upload(
     file: UploadFile = File(...),
     mode: str = Form("color"),
+    auto_warp: bool = Form(True),
     auto_dewarp: bool = Form(True),
+    corners: str | None = Form(None),
+    corners_space: str = Form("input"),
     ocr: bool = Form(False),
     ocr_lang: str = Form("jpn+eng"),
     ocr_engine: str = Form("auto"),
@@ -72,9 +76,24 @@ async def process_upload(
 ) -> dict[str, object]:
     data = await file.read()
     image = _decode_image(data)
+    if corners and not auto_warp:
+        raise HTTPException(status_code=400, detail="corners cannot be combined with auto_warp=false")
+    if corners_space not in {"input", "processed"}:
+        raise HTTPException(status_code=400, detail="corners_space must be input or processed")
+    try:
+        manual_corners = parse_corner_points(corners) if corners else None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
-        result = enhance_image(image, mode=mode, auto_dewarp=auto_dewarp)  # type: ignore[arg-type]
+        result = enhance_image(
+            image,
+            mode=mode,
+            auto_warp=auto_warp,
+            auto_dewarp=auto_dewarp,
+            manual_corners=manual_corners,
+            manual_corners_space=corners_space,  # type: ignore[arg-type]
+        )  # type: ignore[arg-type]
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

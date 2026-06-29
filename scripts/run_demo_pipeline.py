@@ -12,6 +12,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from clearscan_cv.corners import parse_corner_points  # noqa: E402
 from clearscan_cv.evaluation import evaluate_readability  # noqa: E402
 from clearscan_cv.export import write_docx, write_pdf  # noqa: E402
 from clearscan_cv.ocr import OcrUnavailableError, ocr_engine_status, recognize_image, recover_layout_markdown  # noqa: E402
@@ -38,6 +39,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-pdf", action="store_true", help="Skip image-only PDF export.")
     parser.add_argument("--no-dewarp", action="store_true", help="Disable lightweight textline dewarping.")
     parser.add_argument("--no-warp", action="store_true", help="Disable automatic perspective correction.")
+    parser.add_argument(
+        "--corners",
+        help='Manual document corners in input-image coordinates, for example "10,20 300,18 310,420 8,430" or JSON.',
+    )
+    parser.add_argument(
+        "--corners-space",
+        choices=["input", "processed"],
+        default="input",
+        help="Coordinate space for --corners. Use processed when copying corners from a ClearScan report.",
+    )
     return parser
 
 
@@ -96,6 +107,9 @@ def run_demo(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     output_dir = Path(args.out)
     output_dir.mkdir(parents=True, exist_ok=True)
     input_path = ensure_input_image(args.input, output_dir)
+    if args.no_warp and args.corners:
+        raise ValueError("corners cannot be combined with --no-warp")
+    manual_corners = parse_corner_points(args.corners) if args.corners else None
 
     scan_report = process_file(
         input_path=input_path,
@@ -104,6 +118,8 @@ def run_demo(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         auto_warp=not args.no_warp,
         auto_dewarp=not args.no_dewarp,
         side_by_side=True,
+        manual_corners=manual_corners,
+        manual_corners_space=args.corners_space,
     )
     output_path = Path(str(scan_report["output_path"]))
     output_image = read_image(output_path)
@@ -119,6 +135,10 @@ def run_demo(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "output_dir": str(output_dir),
         "mode": args.mode,
         "artifacts": artifacts,
+        "manual_corners": scan_report.get("manual_corners"),
+        "manual_corners_space": scan_report.get("manual_corners_space"),
+        "source_image_size": scan_report.get("source_image_size"),
+        "processing_image_size": scan_report.get("processing_image_size"),
         "document_detection": scan_report.get("document_detection"),
         "dewarp": scan_report.get("dewarp"),
         "deskew": scan_report.get("deskew"),
@@ -191,7 +211,10 @@ def run_demo(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    summary, exit_code = run_demo(args)
+    try:
+        summary, exit_code = run_demo(args)
+    except ValueError as exc:
+        parser.exit(2, f"Invalid demo options: {exc}\n")
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     return exit_code
 

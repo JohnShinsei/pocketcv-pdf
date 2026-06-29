@@ -108,6 +108,20 @@ clearscan examples/generated/sample_document.jpg --out outputs --mode gray --rea
 
 平面文書として処理したい場合は `--no-dewarp` で軽量 dewarp を無効化できます。
 
+自動検出が外れた写真を、手動四隅で再生成する場合:
+
+```bash
+clearscan photo.jpg --out outputs/manual --mode binary --corners "223,414 1864,279 2207,2685 0,2943" --pdf
+```
+
+`--corners` は入力画像上の座標で、左上・右上・右下・左下の順に指定します。順序が多少入れ替わっていても内部で並べ替えます。JSON 形式の `[[x,y], ...]` や `{"corners":[{"x":...,"y":...}, ...]}` も指定できます。
+
+`*_report.json` に出力された `document_detection.corners` を再利用する場合は、処理後の縮小座標なので `--corners-space processed` を付けます。
+
+```bash
+clearscan photo.jpg --out outputs/manual --mode binary --corners "223,414 1864,279 2207,2685 0,2943" --corners-space processed --pdf
+```
+
 OCR も実行する場合:
 
 ```bash
@@ -137,12 +151,15 @@ Python 版の OCR エンジンは任意依存です。軽量に試す場合は `
 
 `--ocr-status` は、RapidOCR、Tesseract、PaddleOCR の Python パッケージ、Tesseract 実行ファイル、言語データの有無を JSON で表示します。
 
+ローカル API の `/api/process` でも、同じ形式の `corners` フォーム値を送ると手動四隅で処理できます。`corners_space` は `input` または `processed` を指定できます。
+
 ## 技術構成
 
 ```text
 src/clearscan_cv/
   api.py          ローカル開発用 FastAPI サーバー
   cli.py          コマンドライン実行用エントリポイント
+  corners.py      手動四隅の解析、座標変換、検証
   dewarp.py       文字行投影に基づく軽量 dewarp
   geometry.py     OpenCV による輪郭検出と透視変換
   pipeline.py     画像処理パイプライン

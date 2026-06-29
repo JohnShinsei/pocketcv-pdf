@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -11,6 +14,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from clearscan_cv.corners import parse_corner_points  # noqa: E402
 from clearscan_cv.geometry import detect_bright_document_region, detect_connected_document_region, detect_document_corners, detect_hough_document_region  # noqa: E402
 from clearscan_cv.dewarp import dewarp_by_textline_columns, estimate_textline_column_offsets  # noqa: E402
 from clearscan_cv.pipeline import MAX_PROCESS_IMAGE_EDGE, MAX_PROCESS_IMAGE_PIXELS, deskew_by_text_lines, enhance_image, estimate_textline_skew, limit_image_resolution, process_file  # noqa: E402
@@ -226,6 +230,25 @@ class PipelineTest(unittest.TestCase):
         self.assertGreater(result.image.shape[0], 100)
         self.assertGreater(result.image.shape[1], 100)
 
+    def test_manual_corners_override_document_detection(self) -> None:
+        manual_corners = [[180, 90], [790, 130], [725, 630], [125, 580]]
+        result = enhance_image(make_synthetic_document(), mode="gray", manual_corners=manual_corners)
+
+        self.assertTrue(result.report["manual_corners"])
+        self.assertEqual(result.report["manual_corners_space"], "input")
+        self.assertEqual(result.report["document_detection"]["method"], "manual_corners")  # type: ignore[index]
+        self.assertEqual(result.report["source_image_size"], {"width": 960, "height": 720})
+        self.assertEqual(result.report["processing_image_size"], {"width": 960, "height": 720})
+        self.assertGreater(result.image.shape[0], 400)
+        self.assertGreater(result.image.shape[1], 500)
+
+    def test_parse_corner_points_accepts_text_and_json(self) -> None:
+        text_points = parse_corner_points("180,90 790,130 725,630 125,580")
+        json_points = parse_corner_points('[{"x": 180, "y": 90}, {"x": 790, "y": 130}, {"x": 725, "y": 630}, {"x": 125, "y": 580}]')
+
+        self.assertEqual(text_points[0], [180.0, 90.0])
+        self.assertEqual(json_points[2], [725.0, 630.0])
+
     def test_limits_large_python_inputs_like_web_pipeline(self) -> None:
         large = np.zeros((4200, 3100, 3), dtype=np.uint8)
         limited = limit_image_resolution(large)
@@ -327,6 +350,39 @@ class PipelineTest(unittest.TestCase):
             report = process_file(input_path, tmp_path / "out", mode="binary")
 
             self.assertTrue(Path(str(report["output_path"])).exists())
+
+    def test_cli_accepts_manual_corners(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_path = tmp_path / "input.jpg"
+            cv2.imwrite(str(input_path), make_synthetic_document())
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "clearscan_cv.cli",
+                    str(input_path),
+                    "--out",
+                    str(tmp_path / "out"),
+                    "--mode",
+                    "gray",
+                    "--corners",
+                    "180,90 790,130 725,630 125,580",
+                ],
+                cwd=ROOT,
+                env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertTrue(payload["manual_corners"])
+            self.assertEqual(payload["manual_corners_space"], "input")
+            self.assertEqual(payload["document_detection"]["method"], "manual_corners")
+            self.assertEqual(payload["source_image_size"], {"width": 960, "height": 720})
 
     def test_static_app_generates_pdf_on_device(self) -> None:
         html = (ROOT / "src" / "clearscan_cv" / "static" / "index.html").read_text(encoding="utf-8")

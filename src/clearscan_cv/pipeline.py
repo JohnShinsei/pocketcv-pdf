@@ -8,11 +8,13 @@ from typing import Literal
 import cv2
 import numpy as np
 
+from .corners import CornerPoints, manual_detection_from_corners, scale_corner_points
 from .dewarp import dewarp_by_textline_columns
 from .geometry import detect_document_corners, ensure_bgr, four_point_transform
 from .quality import assess_quality, compare_quality
 
 OutputMode = Literal["color", "gray", "binary"]
+CornerCoordinateSpace = Literal["input", "processed"]
 MAX_PROCESS_IMAGE_EDGE = 3200
 MAX_PROCESS_IMAGE_PIXELS = 6_500_000
 
@@ -332,13 +334,33 @@ def build_side_by_side(original: np.ndarray, processed: np.ndarray) -> np.ndarra
     return cv2.hconcat([left, gap, right])
 
 
-def enhance_image(image: np.ndarray, mode: OutputMode = "color", auto_warp: bool = True, auto_dewarp: bool = True) -> EnhancementResult:
+def enhance_image(
+    image: np.ndarray,
+    mode: OutputMode = "color",
+    auto_warp: bool = True,
+    auto_dewarp: bool = True,
+    manual_corners: CornerPoints | None = None,
+    manual_corners_space: CornerCoordinateSpace = "input",
+) -> EnhancementResult:
     if mode not in {"color", "gray", "binary"}:
         raise ValueError("mode must be one of: color, gray, binary")
+    if manual_corners_space not in {"input", "processed"}:
+        raise ValueError("manual_corners_space must be input or processed")
 
-    bgr = limit_image_resolution(ensure_bgr(image))
-    detection = detect_document_corners(bgr)
-    warped = four_point_transform(bgr, detection.corners) if auto_warp and detection.found else bgr.copy()
+    source_bgr = ensure_bgr(image)
+    source_height, source_width = source_bgr.shape[:2]
+    bgr = limit_image_resolution(source_bgr)
+    height, width = bgr.shape[:2]
+    if manual_corners is not None:
+        if manual_corners_space == "input":
+            processed_corners = scale_corner_points(manual_corners, (source_width, source_height), (width, height))
+        else:
+            processed_corners = manual_corners
+        detection = manual_detection_from_corners(processed_corners, width=width, height=height)
+    else:
+        detection = detect_document_corners(bgr)
+    use_perspective = manual_corners is not None or (auto_warp and detection.found)
+    warped = four_point_transform(bgr, detection.corners) if use_perspective else bgr.copy()
     dewarp_result = dewarp_by_textline_columns(warped) if auto_dewarp else None
     dewarped = dewarp_result.image if dewarp_result is not None else warped
     deskewed, deskew_report = deskew_by_text_lines(dewarped)
@@ -356,6 +378,10 @@ def enhance_image(image: np.ndarray, mode: OutputMode = "color", auto_warp: bool
         "mode": mode,
         "auto_warp": auto_warp,
         "auto_dewarp": auto_dewarp,
+        "manual_corners": manual_corners is not None,
+        "manual_corners_space": manual_corners_space if manual_corners is not None else None,
+        "source_image_size": {"width": source_width, "height": source_height},
+        "processing_image_size": {"width": width, "height": height},
         "document_detection": detection.to_dict(),
         "dewarp": dewarp_result.report if dewarp_result is not None else {"applied": False, "method": "disabled"},
         "deskew": deskew_report,
@@ -373,6 +399,8 @@ def process_file(
     auto_warp: bool = True,
     auto_dewarp: bool = True,
     side_by_side: bool = False,
+    manual_corners: CornerPoints | None = None,
+    manual_corners_space: CornerCoordinateSpace = "input",
 ) -> dict[str, object]:
     input_path = Path(input_path)
     output_dir = Path(output_dir)
@@ -383,7 +411,14 @@ def process_file(
     if image is None:
         raise FileNotFoundError(f"Could not read image: {input_path}")
 
-    result = enhance_image(image, mode=mode, auto_warp=auto_warp, auto_dewarp=auto_dewarp)
+    result = enhance_image(
+        image,
+        mode=mode,
+        auto_warp=auto_warp,
+        auto_dewarp=auto_dewarp,
+        manual_corners=manual_corners,
+        manual_corners_space=manual_corners_space,
+    )
     output_path = output_dir / f"{input_path.stem}_clearscan.png"
     report_path = output_dir / f"{input_path.stem}_report.json"
     cv2.imwrite(str(output_path), result.image)

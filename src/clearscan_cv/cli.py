@@ -7,6 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .corners import parse_corner_points
 from .evaluation import evaluate_readability
 from .export import write_docx, write_pdf
 from .ocr import OcrUnavailableError, ocr_engine_status, recognize_image, recover_layout_markdown
@@ -20,6 +21,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=["color", "gray", "binary"], default="color", help="Output style.")
     parser.add_argument("--no-warp", action="store_true", help="Disable automatic perspective correction.")
     parser.add_argument("--no-dewarp", action="store_true", help="Disable lightweight textline dewarping.")
+    parser.add_argument(
+        "--corners",
+        help='Manual document corners in input-image coordinates, for example "10,20 300,18 310,420 8,430" or JSON.',
+    )
+    parser.add_argument(
+        "--corners-space",
+        choices=["input", "processed"],
+        default="input",
+        help="Coordinate space for --corners. Use processed when copying corners from a ClearScan report.",
+    )
     parser.add_argument("--compare", action="store_true", help="Write a side-by-side comparison image.")
     parser.add_argument("--pdf", action="store_true", help="Write an image-only PDF from the processed scan.")
     parser.add_argument("--searchable-pdf", action="store_true", help="Run OCR and write a searchable PDF text layer.")
@@ -55,6 +66,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if not args.input:
         parser.error("input is required unless --ocr-status is used")
+    if args.no_warp and args.corners:
+        parser.error("--corners cannot be combined with --no-warp")
+    try:
+        manual_corners = parse_corner_points(args.corners) if args.corners else None
+    except ValueError as exc:
+        parser.error(str(exc))
 
     report = process_file(
         input_path=args.input,
@@ -63,6 +80,8 @@ def main(argv: list[str] | None = None) -> int:
         auto_warp=not args.no_warp,
         auto_dewarp=not args.no_dewarp,
         side_by_side=args.compare,
+        manual_corners=manual_corners,
+        manual_corners_space=args.corners_space,
     )
     output_path = Path(str(report["output_path"]))
     output_image: np.ndarray | None = None
