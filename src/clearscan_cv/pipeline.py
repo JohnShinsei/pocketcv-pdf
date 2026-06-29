@@ -11,6 +11,7 @@ import numpy as np
 from .corners import CornerPoints, manual_detection_from_corners, scale_corner_points
 from .dewarp import dewarp_by_textline_columns
 from .geometry import DocumentDetection, detect_document_corners, ensure_bgr, four_point_transform
+from .image_io import decode_image_file
 from .model_hooks import apply_external_corner_hook, apply_external_image_hook
 from .quality import assess_quality, compare_quality, diagnose_scan_quality
 
@@ -617,6 +618,40 @@ def enhance_image(
             detection = detect_document_corners(bgr)
     use_perspective = manual_corners is not None or (auto_warp and detection.found)
     warped = four_point_transform(bgr, detection.corners) if use_perspective else bgr.copy()
+    if mode == "color":
+        output_quality = assess_quality(warped)
+        color_stage_report = {"applied": False, "method": "color_geometry_only", "reason": "color_mode_bypasses_enhancement"}
+        report = {
+            "mode": mode,
+            "selected_mode": "color",
+            "auto_selection": None,
+            "auto_warp": auto_warp,
+            "auto_dewarp": auto_dewarp,
+            "manual_corners": manual_corners is not None,
+            "manual_corners_space": manual_corners_space if manual_corners is not None else None,
+            "source_image_size": {"width": source_width, "height": source_height},
+            "processing_image_size": {"width": width, "height": height},
+            "document_detection": detection.to_dict(),
+            "external_detector": external_detector_report,
+            "dewarp": color_stage_report.copy(),
+            "deskew": {"angle": 0.0, "confidence": 0.0, "method": "color_geometry_only"},
+            "external_restorer": color_stage_report.copy(),
+            "template_guided_illumination": color_stage_report.copy(),
+            "quality": compare_quality(warped, warped),
+            "output_quality": output_quality,
+            "quality_diagnostics": diagnose_scan_quality(
+                output_quality,
+                perspective_confidence=float(detection.confidence) if detection.found else 0.0,
+            ),
+            "pipeline": [
+                _external_detector_pipeline_stage(external_detector_report, external_detector_command),
+                "document_detection",
+                "perspective_correction",
+                "color_geometry_only",
+            ],
+        }
+        return EnhancementResult(image=warped, report=report)
+
     dewarp_result = dewarp_by_textline_columns(warped) if auto_dewarp else None
     dewarped = dewarp_result.image if dewarp_result is not None else warped
     deskewed, deskew_report = deskew_by_text_lines(dewarped)
@@ -705,16 +740,19 @@ def process_file(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    raw = np.fromfile(str(input_path), dtype=np.uint8)
-    image = cv2.imdecode(raw, cv2.IMREAD_COLOR)
-    if image is None:
+    try:
+        decoded_input = decode_image_file(input_path, flags=cv2.IMREAD_COLOR)
+    except ValueError as exc:
         raise FileNotFoundError(f"Could not read image: {input_path}")
+    image = decoded_input.image
     template_image = None
+    decoded_template = None
     if template_path is not None:
-        raw_template = np.fromfile(str(template_path), dtype=np.uint8)
-        template_image = cv2.imdecode(raw_template, cv2.IMREAD_COLOR)
-        if template_image is None:
+        try:
+            decoded_template = decode_image_file(template_path, flags=cv2.IMREAD_COLOR)
+        except ValueError as exc:
             raise FileNotFoundError(f"Could not read template image: {template_path}")
+        template_image = decoded_template.image
 
     result = enhance_image(
         image,
@@ -737,6 +775,8 @@ def process_file(
     report = {
         "input_path": str(input_path),
         "template_path": str(template_path) if template_path is not None else None,
+        "input_decode": decoded_input.to_report(),
+        "template_decode": decoded_template.to_report() if decoded_template is not None else None,
         "output_path": str(output_path),
         "report_path": str(report_path),
         **result.report,

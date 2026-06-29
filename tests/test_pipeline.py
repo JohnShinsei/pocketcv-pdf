@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from clearscan_cv.corners import parse_corner_points  # noqa: E402
 from clearscan_cv.geometry import detect_bright_document_region, detect_connected_document_region, detect_document_corners, detect_hough_document_region  # noqa: E402
 from clearscan_cv.dewarp import dewarp_by_textline_columns, estimate_textline_column_offsets  # noqa: E402
+from clearscan_cv.image_io import decode_image_bytes, read_exif_orientation  # noqa: E402
 from clearscan_cv.pipeline import (  # noqa: E402
     MAX_PROCESS_IMAGE_EDGE,
     MAX_PROCESS_IMAGE_PIXELS,
@@ -124,6 +125,26 @@ def make_complex_two_column_page() -> np.ndarray:
         y = 118 + index * 38
         cv2.line(image, (430, y), (690, y), (35, 35, 35), 2, cv2.LINE_AA)
     return image
+
+
+def jpeg_with_exif_orientation(image: np.ndarray, orientation: int) -> bytes:
+    ok, encoded = cv2.imencode(".jpg", image)
+    if not ok:
+        raise RuntimeError("Could not encode test JPEG")
+    tiff = (
+        b"MM\x00*\x00\x00\x00\x08"
+        + (1).to_bytes(2, "big")
+        + (0x0112).to_bytes(2, "big")
+        + (3).to_bytes(2, "big")
+        + (1).to_bytes(4, "big")
+        + int(orientation).to_bytes(2, "big")
+        + b"\x00\x00"
+        + (0).to_bytes(4, "big")
+    )
+    app1_payload = b"Exif\x00\x00" + tiff
+    app1 = b"\xff\xe1" + (len(app1_payload) + 2).to_bytes(2, "big") + app1_payload
+    jpeg = encoded.tobytes()
+    return jpeg[:2] + app1 + jpeg[2:]
 
 
 def make_shadowed_noisy_page() -> np.ndarray:
@@ -283,6 +304,34 @@ def make_external_detector_command(script_path: Path, *, should_fail: bool = Fal
 
 
 class PipelineTest(unittest.TestCase):
+    def test_decodes_phone_jpeg_exif_orientation(self) -> None:
+        image = np.zeros((32, 84, 3), dtype=np.uint8)
+        image[:, :42] = (10, 80, 180)
+        image[:, 42:] = (220, 230, 240)
+        encoded = jpeg_with_exif_orientation(image, 6)
+
+        decoded = decode_image_bytes(encoded)
+
+        self.assertEqual(read_exif_orientation(encoded), 6)
+        self.assertTrue(decoded.orientation_applied)
+        self.assertEqual(decoded.decoded_size, {"width": 84, "height": 32})
+        self.assertEqual(decoded.oriented_size, {"width": 32, "height": 84})
+        self.assertEqual(decoded.image.shape[:2], (84, 32))
+
+    def test_color_mode_is_geometry_only_without_enhancement(self) -> None:
+        image = np.full((96, 128, 3), (214, 224, 231), dtype=np.uint8)
+        cv2.rectangle(image, (18, 16), (110, 80), (185, 198, 214), -1)
+        cv2.putText(image, "COLOR", (25, 54), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (52, 70, 95), 1, cv2.LINE_AA)
+
+        result = enhance_image(image, mode="color", auto_warp=False, auto_dewarp=True)
+
+        self.assertTrue(np.array_equal(result.image, image))
+        self.assertEqual(result.report["selected_mode"], "color")
+        self.assertEqual(result.report["dewarp"]["method"], "color_geometry_only")  # type: ignore[index]
+        self.assertEqual(result.report["deskew"]["method"], "color_geometry_only")  # type: ignore[index]
+        self.assertEqual(result.report["external_restorer"]["method"], "color_geometry_only")  # type: ignore[index]
+        self.assertIn("color_geometry_only", result.report["pipeline"])
+
     def test_detects_document_quad(self) -> None:
         detection = detect_document_corners(make_synthetic_document())
         self.assertTrue(detection.found)

@@ -9,6 +9,7 @@ import numpy as np
 from .corners import parse_corner_points
 from .evaluation import evaluate_readability
 from .export import build_docx_bytes, build_pdf_bytes, build_pdf_pages_bytes
+from .image_io import DecodedImage, decode_image_bytes
 from .ocr import OcrUnavailableError, ocr_engine_status, recognize_image, recover_layout_markdown
 from .pipeline import enhance_image
 from .quality import diagnose_scan_quality
@@ -23,12 +24,11 @@ except ImportError as exc:  # pragma: no cover
 app = FastAPI(title="PocketCV PDF", version="0.1.0")
 
 
-def _decode_image(data: bytes) -> np.ndarray:
-    array = np.frombuffer(data, dtype=np.uint8)
-    image = cv2.imdecode(array, cv2.IMREAD_COLOR)
-    if image is None:
+def _decode_image(data: bytes) -> DecodedImage:
+    try:
+        return decode_image_bytes(data, flags=cv2.IMREAD_COLOR)
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail="Unsupported or unreadable image.")
-    return image
 
 
 def _encode_png_base64(image: np.ndarray) -> str:
@@ -104,8 +104,10 @@ async def process_upload(
     expected_text: str | None = Form(None),
 ) -> dict[str, object]:
     data = await file.read()
-    image = _decode_image(data)
-    template_image = _decode_image(await template_file.read()) if template_file is not None else None
+    decoded_image = _decode_image(data)
+    decoded_template = _decode_image(await template_file.read()) if template_file is not None else None
+    image = decoded_image.image
+    template_image = decoded_template.image if decoded_template is not None else None
     if corners and not auto_warp:
         raise HTTPException(status_code=400, detail="corners cannot be combined with auto_warp=false")
     if corners_space not in {"input", "processed"}:
@@ -134,6 +136,8 @@ async def process_upload(
         "image_base64": _encode_png_base64(result.image),
         "report": result.report,
     }
+    result.report["input_decode"] = decoded_image.to_report()
+    result.report["template_decode"] = decoded_template.to_report() if decoded_template is not None else None
     ocr_result = None
     if ocr or searchable_pdf or docx:
         try:
@@ -184,9 +188,11 @@ async def process_batch_upload(
     processed_images: list[np.ndarray] = []
     ocr_results = []
     layout_pages: list[str] = []
-    template_image = _decode_image(await template_file.read()) if template_file is not None else None
+    decoded_template = _decode_image(await template_file.read()) if template_file is not None else None
+    template_image = decoded_template.image if decoded_template is not None else None
     for index, file in enumerate(files, start=1):
-        image = _decode_image(await file.read())
+        decoded_image = _decode_image(await file.read())
+        image = decoded_image.image
         try:
             result = enhance_image(
                 image,
@@ -204,6 +210,8 @@ async def process_batch_upload(
             "image_base64": _encode_png_base64(result.image),
             "report": result.report,
         }
+        result.report["input_decode"] = decoded_image.to_report()
+        result.report["template_decode"] = decoded_template.to_report() if decoded_template is not None else None
         ocr_result = None
         if ocr or searchable_pdf or layout or docx:
             try:

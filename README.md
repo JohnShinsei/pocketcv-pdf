@@ -45,6 +45,7 @@ PWA の Service Worker は新しい処理ロジックを検出しやすいよう
 - ページごとの品質スコアと平均品質の表示
 - PWA としてのオフライン起動、端末への追加導線、PDF ファイル共有ボタン
 - Python/OpenCV による CLI 版の画像処理パイプラインとテスト
+- Python CLI/API ではスマートフォン JPEG の EXIF Orientation を読み取り、縦横方向を補正してから四隅検出を実行
 - Python CLI/API でも、処理後画像を RapidOCR / Tesseract / PaddleOCR に渡す任意 OCR ステージを実行可能
 - Python CLI/API から画像 PDF と OCR 文字層付き searchable PDF を出力可能
 - Python CLI/API で複数画像をまとめて処理し、OCR 付き多ページ PDF、Markdown、DOCX、batch report を生成可能
@@ -74,7 +75,7 @@ uvicorn clearscan_cv.api:app --reload
 
 - `白黒スキャン`: 去陰影と文字強調を行った白黒スキャン画像を生成
 - `グレースキャン`: 去陰影と文字強調を行ったグレースケール画像を生成
-- `カラースキャン`: 文字を強調しつつ色を少し残したスキャン画像を生成
+- `カラースキャン`: 四隅の切り出しと透視補正だけを行い、元の色と質感を残した画像を生成
 - `解析レポート`: 元画像、処理後画像、エッジマップ、評価指標をまとめた PDF レポートを生成
 - `Edges`: エッジマップを PDF 化
 
