@@ -2047,6 +2047,206 @@
         };
       }
 
+      function houghLineFromRhoTheta(rho, theta, support, group, width, height) {
+        const cos = Math.cos(theta);
+        const sin = Math.sin(theta);
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const midX = Math.abs(cos) > 0.18 ? (rho - centerY * sin) / cos : centerX;
+        const midY = Math.abs(sin) > 0.18 ? (rho - centerX * cos) / sin : centerY;
+        return {
+          a: cos,
+          b: sin,
+          c: -rho,
+          support,
+          group,
+          midX,
+          midY,
+        };
+      }
+
+      function intersectHoughLines(lineA, lineB) {
+        const determinant = lineA.a * lineB.b - lineB.a * lineA.b;
+        if (Math.abs(determinant) < 1e-6) {
+          return null;
+        }
+        return {
+          x: (lineA.b * lineB.c - lineB.b * lineA.c) / determinant,
+          y: (lineA.c * lineB.a - lineB.c * lineA.a) / determinant,
+        };
+      }
+
+      function houghSideCandidates(lines, side, width, height) {
+        const maxSupport = Math.max(1, ...lines.map((line) => line.support));
+        return lines
+          .map((line) => {
+            const supportScore = Math.min(1, line.support / maxSupport);
+            let edgeScore = 0;
+            if (side === "top") {
+              if (line.midY > height * 0.62) {
+                return null;
+              }
+              edgeScore = 1 - line.midY / Math.max(1, height);
+            } else if (side === "bottom") {
+              if (line.midY < height * 0.38) {
+                return null;
+              }
+              edgeScore = line.midY / Math.max(1, height);
+            } else if (side === "left") {
+              if (line.midX > width * 0.62) {
+                return null;
+              }
+              edgeScore = 1 - line.midX / Math.max(1, width);
+            } else {
+              if (line.midX < width * 0.38) {
+                return null;
+              }
+              edgeScore = line.midX / Math.max(1, width);
+            }
+            return { line, score: edgeScore * 0.72 + supportScore * 0.28 };
+          })
+          .filter(Boolean)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 8)
+          .map((candidate) => candidate.line);
+      }
+
+      function detectHoughLineQuad(sourceCanvas, image, step) {
+        const { width, height } = sourceCanvas;
+        const data = image.data;
+        const sampleStep = Math.max(step, Math.floor(Math.max(width, height) / 620));
+        const edgePoints = [];
+        const maxEdgePoints = 24000;
+
+        for (let y = sampleStep; y < height - sampleStep; y += sampleStep) {
+          for (let x = sampleStep; x < width - sampleStep; x += sampleStep) {
+            const leftIndex = (y * width + x - sampleStep) * 4;
+            const rightIndex = (y * width + x + sampleStep) * 4;
+            const topIndex = ((y - sampleStep) * width + x) * 4;
+            const bottomIndex = ((y + sampleStep) * width + x) * 4;
+            const gradient =
+              Math.abs(luminance(data[rightIndex], data[rightIndex + 1], data[rightIndex + 2]) - luminance(data[leftIndex], data[leftIndex + 1], data[leftIndex + 2])) +
+              Math.abs(luminance(data[bottomIndex], data[bottomIndex + 1], data[bottomIndex + 2]) - luminance(data[topIndex], data[topIndex + 1], data[topIndex + 2]));
+            if (gradient > 42) {
+              edgePoints.push({ x, y });
+            }
+          }
+        }
+
+        if (edgePoints.length < ((width / sampleStep) * (height / sampleStep)) * 0.004) {
+          return null;
+        }
+
+        const points =
+          edgePoints.length > maxEdgePoints
+            ? edgePoints.filter((_, index) => index % Math.ceil(edgePoints.length / maxEdgePoints) === 0)
+            : edgePoints;
+        const diagonal = Math.hypot(width, height);
+        const binSize = Math.max(4, sampleStep * 2);
+        const supportThreshold = Math.max(18, Math.round(Math.min(width, height) / sampleStep * 0.08));
+        const angleGroups = [
+          { group: "vertical", degrees: [-28, -22, -16, -10, -4, 0, 4, 10, 16, 22, 28] },
+          { group: "horizontal", degrees: [62, 68, 74, 80, 86, 90, 94, 100, 106, 112, 118] },
+        ];
+        const candidateLines = [];
+
+        angleGroups.forEach(({ group, degrees }) => {
+          degrees.forEach((degree) => {
+            const theta = (degree * Math.PI) / 180;
+            const cos = Math.cos(theta);
+            const sin = Math.sin(theta);
+            const bins = new Map();
+            points.forEach((point) => {
+              const rho = point.x * cos + point.y * sin;
+              const bin = Math.round((rho + diagonal) / binSize);
+              bins.set(bin, (bins.get(bin) || 0) + 1);
+            });
+
+            [...bins.entries()]
+              .filter((entry) => entry[1] >= supportThreshold)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 5)
+              .forEach(([bin, support]) => {
+                const rho = bin * binSize - diagonal;
+                candidateLines.push(houghLineFromRhoTheta(rho, theta, support, group, width, height));
+              });
+          });
+        });
+
+        const horizontal = candidateLines.filter((line) => line.group === "horizontal");
+        const vertical = candidateLines.filter((line) => line.group === "vertical");
+        if (horizontal.length < 2 || vertical.length < 2) {
+          return null;
+        }
+
+        const topCandidates = houghSideCandidates(horizontal, "top", width, height);
+        const bottomCandidates = houghSideCandidates(horizontal, "bottom", width, height);
+        const leftCandidates = houghSideCandidates(vertical, "left", width, height);
+        const rightCandidates = houghSideCandidates(vertical, "right", width, height);
+        if (!topCandidates.length || !bottomCandidates.length || !leftCandidates.length || !rightCandidates.length) {
+          return null;
+        }
+
+        let best = null;
+        const marginX = width * 0.08;
+        const marginY = height * 0.08;
+        topCandidates.forEach((top) => {
+          bottomCandidates.forEach((bottom) => {
+            if (bottom.midY - top.midY < height * 0.28) {
+              return;
+            }
+            leftCandidates.forEach((left) => {
+              rightCandidates.forEach((right) => {
+                if (right.midX - left.midX < width * 0.28) {
+                  return;
+                }
+                const corners = [
+                  intersectHoughLines(top, left),
+                  intersectHoughLines(top, right),
+                  intersectHoughLines(bottom, right),
+                  intersectHoughLines(bottom, left),
+                ];
+                if (corners.some((point) => !point)) {
+                  return;
+                }
+                if (
+                  corners.some(
+                    (point) => point.x < -marginX || point.x > width - 1 + marginX || point.y < -marginY || point.y > height - 1 + marginY
+                  )
+                ) {
+                  return;
+                }
+                const clipped = corners.map((point) => ({
+                  x: clamp(point.x, 0, width - 1),
+                  y: clamp(point.y, 0, height - 1),
+                }));
+                const validated = validateDetectedQuad(clipped, width, height);
+                if (!validated) {
+                  return;
+                }
+                const supportScore = (top.support + bottom.support + left.support + right.support) / Math.max(1, points.length);
+                const score = validated.areaRatio * 0.82 + Math.min(0.18, supportScore);
+                if (!best || score > best.score) {
+                  best = { corners: validated.corners, areaRatio: validated.areaRatio, score };
+                }
+              });
+            });
+          });
+        });
+
+        if (!best) {
+          return null;
+        }
+
+        return {
+          found: true,
+          confidence: clamp(0.24 + best.areaRatio * 0.56 + best.score * 0.16, 0.16, 0.9),
+          corners: best.corners,
+          threshold: supportThreshold,
+          method: "hough_lines",
+        };
+      }
+
       function detectDocumentQuad(sourceCanvas) {
         const context = sourceCanvas.getContext("2d", { willReadFrequently: true });
         const { width, height } = sourceCanvas;
@@ -2072,6 +2272,11 @@
         const connectedCandidate = detectConnectedPaperQuad(sourceCanvas, image, step, histogram, samples);
         if (connectedCandidate) {
           return connectedCandidate;
+        }
+
+        const houghCandidate = detectHoughLineQuad(sourceCanvas, image, step);
+        if (houghCandidate) {
+          return houghCandidate;
         }
 
         const mean = sum / Math.max(1, samples);

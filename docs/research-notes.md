@@ -16,6 +16,18 @@ PocketCV PDF は、スマートフォンや PC ブラウザで完結する文書
 - `src/clearscan_cv/static/index.html`: `estimateTextLineSkew`, `deskewCanvasByTextLines`
 - UI のページ品質表示と解析レポートに `文字行傾き補正` を追加
 
+### Hough 直線 fallback による四隅復元
+
+紙面の輪郭が影や背景で途切れ、最大輪郭だけでは四角形にならない場合に備えて、長い水平・垂直寄りの直線を Hough 的に投票し、上下左右の境界線の交点から四隅を復元する fallback を追加しました。
+
+この改善は、平面文書では四つの対応点から Homography が決まるという前提を保ちつつ、文書境界線が閉じた輪郭として検出できない写真にも対応するためのものです。Python/OpenCV 版は `HoughLinesP`、Web 版は Canvas のサンプリングエッジに対する軽量 accumulator で実装しています。
+
+実装箇所:
+
+- `src/clearscan_cv/geometry.py`: `detect_hough_document_region`, `detect_fallback_document_region`
+- `src/clearscan_cv/static/index.html`: `detectHoughLineQuad`
+- テスト: 断裂した紙面エッジだけを持つ合成ページで、`hough_lines` fallback が四隅を復元することを確認
+
 参照した考え方:
 
 - Jagannathan and Jawahar, "Perspective Correction Methods for Camera-Based Document Analysis", CBDAR 2005: 文書境界、文字行、レイアウト alignment を透視補正の手掛かりに使う。

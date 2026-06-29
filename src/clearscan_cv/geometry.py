@@ -103,6 +103,179 @@ def approximate_quad(contour: np.ndarray) -> np.ndarray | None:
     return None
 
 
+def _line_from_segment(segment: np.ndarray) -> dict[str, float]:
+    x1, y1, x2, y2 = [float(value) for value in segment]
+    dx = x2 - x1
+    dy = y2 - y1
+    length = float(np.hypot(dx, dy))
+    angle = (float(np.degrees(np.arctan2(dy, dx))) + 180.0) % 180.0
+    a = y1 - y2
+    b = x2 - x1
+    c = x1 * y2 - x2 * y1
+    norm = float(np.hypot(a, b))
+    if norm <= 0:
+        norm = 1.0
+    return {
+        "a": a / norm,
+        "b": b / norm,
+        "c": c / norm,
+        "length": length,
+        "mid_x": (x1 + x2) / 2.0,
+        "mid_y": (y1 + y2) / 2.0,
+        "angle": angle,
+    }
+
+
+def _line_intersection(line_a: dict[str, float], line_b: dict[str, float]) -> tuple[float, float] | None:
+    a1, b1, c1 = line_a["a"], line_a["b"], line_a["c"]
+    a2, b2, c2 = line_b["a"], line_b["b"], line_b["c"]
+    determinant = a1 * b2 - a2 * b1
+    if abs(determinant) < 1e-6:
+        return None
+    x = (b1 * c2 - b2 * c1) / determinant
+    y = (c1 * a2 - c2 * a1) / determinant
+    return float(x), float(y)
+
+
+def _hough_side_candidates(lines: list[dict[str, float]], side: str, width: int, height: int) -> list[dict[str, float]]:
+    max_dim = float(max(width, height))
+    candidates: list[tuple[float, dict[str, float]]] = []
+    for line in lines:
+        length_score = min(1.0, line["length"] / max_dim)
+        if side == "top":
+            if line["mid_y"] > height * 0.62:
+                continue
+            score = (1.0 - line["mid_y"] / max(1.0, height)) * 0.7 + length_score * 0.3
+        elif side == "bottom":
+            if line["mid_y"] < height * 0.38:
+                continue
+            score = (line["mid_y"] / max(1.0, height)) * 0.7 + length_score * 0.3
+        elif side == "left":
+            if line["mid_x"] > width * 0.62:
+                continue
+            score = (1.0 - line["mid_x"] / max(1.0, width)) * 0.7 + length_score * 0.3
+        else:
+            if line["mid_x"] < width * 0.38:
+                continue
+            score = (line["mid_x"] / max(1.0, width)) * 0.7 + length_score * 0.3
+        candidates.append((score, line))
+
+    return [line for _, line in sorted(candidates, key=lambda item: item[0], reverse=True)[:8]]
+
+
+def detect_hough_document_region(image: np.ndarray, max_dim: int = 900) -> DocumentDetection | None:
+    bgr = ensure_bgr(image)
+    height, width = bgr.shape[:2]
+    scale = min(1.0, max_dim / float(max(width, height)))
+    small = cv2.resize(bgr, (int(width * scale), int(height * scale)), interpolation=cv2.INTER_AREA) if scale < 1.0 else bgr
+
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    median = float(np.median(gray))
+    lower = int(max(0, 0.55 * median))
+    upper = int(min(255, max(70, 1.35 * median)))
+    edges = cv2.Canny(gray, lower, upper)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, np.ones((3, 3), dtype=np.uint8), iterations=1)
+
+    min_line_length = max(40, int(round(min(small.shape[:2]) * 0.24)))
+    max_line_gap = max(8, int(round(max(small.shape[:2]) * 0.025)))
+    threshold = max(36, int(round(max(small.shape[:2]) * 0.06)))
+    raw_lines = cv2.HoughLinesP(edges, 1, np.pi / 180.0, threshold, minLineLength=min_line_length, maxLineGap=max_line_gap)
+    if raw_lines is None:
+        return None
+
+    horizontal: list[dict[str, float]] = []
+    vertical: list[dict[str, float]] = []
+    for raw_line in raw_lines[:, 0, :]:
+        line = _line_from_segment(raw_line.astype(np.float32) / scale)
+        if line["length"] < min(width, height) * 0.18:
+            continue
+        horizontal_angle = min(line["angle"], abs(180.0 - line["angle"]))
+        vertical_angle = abs(line["angle"] - 90.0)
+        if horizontal_angle <= 28.0:
+            horizontal.append(line)
+        elif vertical_angle <= 38.0:
+            vertical.append(line)
+
+    if len(horizontal) < 2 or len(vertical) < 2:
+        return None
+
+    top_candidates = _hough_side_candidates(horizontal, "top", width, height)
+    bottom_candidates = _hough_side_candidates(horizontal, "bottom", width, height)
+    left_candidates = _hough_side_candidates(vertical, "left", width, height)
+    right_candidates = _hough_side_candidates(vertical, "right", width, height)
+    if not top_candidates or not bottom_candidates or not left_candidates or not right_candidates:
+        return None
+
+    image_area = float(width * height)
+    best: tuple[np.ndarray, float] | None = None
+    margin_x = width * 0.08
+    margin_y = height * 0.08
+    for top in top_candidates:
+        for bottom in bottom_candidates:
+            if bottom["mid_y"] - top["mid_y"] < height * 0.28:
+                continue
+            for left in left_candidates:
+                for right in right_candidates:
+                    if right["mid_x"] - left["mid_x"] < width * 0.28:
+                        continue
+                    intersections = [
+                        _line_intersection(top, left),
+                        _line_intersection(top, right),
+                        _line_intersection(bottom, right),
+                        _line_intersection(bottom, left),
+                    ]
+                    if any(point is None for point in intersections):
+                        continue
+                    points = np.array(intersections, dtype=np.float32)
+                    if (
+                        np.any(points[:, 0] < -margin_x)
+                        or np.any(points[:, 0] > width - 1 + margin_x)
+                        or np.any(points[:, 1] < -margin_y)
+                        or np.any(points[:, 1] > height - 1 + margin_y)
+                    ):
+                        continue
+                    points[:, 0] = np.clip(points[:, 0], 0, width - 1)
+                    points[:, 1] = np.clip(points[:, 1], 0, height - 1)
+                    ordered = order_points(points)
+                    area_ratio = min(1.0, polygon_area(ordered) / image_area)
+                    if not quad_is_plausible(ordered, width, height, area_ratio):
+                        continue
+                    if looks_like_partial_bright_region(ordered, width, height, area_ratio):
+                        continue
+                    if looks_like_unsafe_full_frame_crop(ordered, width, height, area_ratio):
+                        continue
+
+                    line_score = (top["length"] + bottom["length"] + left["length"] + right["length"]) / max(1.0, 2.0 * (width + height))
+                    score = area_ratio * 0.78 + min(1.0, line_score) * 0.22
+                    if best is None or score > best[1]:
+                        best = (ordered, score)
+
+    if best is None:
+        return None
+
+    ordered, score = best
+    area_ratio = min(1.0, polygon_area(ordered) / image_area)
+    confidence = min(0.9, 0.26 + area_ratio * 0.52 + score * 0.18)
+    return DocumentDetection(
+        corners=np.round(ordered, 2).tolist(),
+        confidence=round(float(confidence), 3),
+        area_ratio=round(float(area_ratio), 3),
+        method="hough_lines",
+        found=True,
+    )
+
+
+def detect_fallback_document_region(image: np.ndarray, max_dim: int = 900) -> DocumentDetection | None:
+    hough_detection = detect_hough_document_region(image, max_dim=max_dim)
+    if hough_detection is not None:
+        return hough_detection
+    connected_detection = detect_connected_document_region(image, max_dim=max_dim)
+    if connected_detection is not None:
+        return connected_detection
+    return detect_bright_document_region(image, max_dim=max_dim)
+
+
 def detect_connected_document_region(image: np.ndarray, max_dim: int = 900) -> DocumentDetection | None:
     bgr = ensure_bgr(image)
     height, width = bgr.shape[:2]
@@ -254,12 +427,9 @@ def detect_document_corners(image: np.ndarray, max_dim: int = 900) -> DocumentDe
             best_rect = (box, contour_area, "min_area_rect")
 
     if best_rect is None:
-        connected_detection = detect_connected_document_region(bgr, max_dim=max_dim)
-        if connected_detection is not None:
-            return connected_detection
-        brightness_detection = detect_bright_document_region(bgr, max_dim=max_dim)
-        if brightness_detection is not None:
-            return brightness_detection
+        fallback_detection = detect_fallback_document_region(bgr, max_dim=max_dim)
+        if fallback_detection is not None:
+            return fallback_detection
         return image_border_detection(width, height)
 
     points, contour_area, method = best_rect
@@ -268,12 +438,9 @@ def detect_document_corners(image: np.ndarray, max_dim: int = 900) -> DocumentDe
     if not quad_is_plausible(ordered, width, height, area_ratio) or looks_like_partial_bright_region(
         ordered, width, height, area_ratio
     ) or looks_like_unsafe_full_frame_crop(ordered, width, height, area_ratio):
-        connected_detection = detect_connected_document_region(bgr, max_dim=max_dim)
-        if connected_detection is not None:
-            return connected_detection
-        brightness_detection = detect_bright_document_region(bgr, max_dim=max_dim)
-        if brightness_detection is not None:
-            return brightness_detection
+        fallback_detection = detect_fallback_document_region(bgr, max_dim=max_dim)
+        if fallback_detection is not None:
+            return fallback_detection
         return image_border_detection(width, height)
 
     confidence = min(0.99, 0.25 + area_ratio * 0.9 + (0.2 if method == "contour_quad" else 0.0))

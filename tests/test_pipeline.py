@@ -11,7 +11,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from clearscan_cv.geometry import detect_bright_document_region, detect_connected_document_region, detect_document_corners  # noqa: E402
+from clearscan_cv.geometry import detect_bright_document_region, detect_connected_document_region, detect_document_corners, detect_hough_document_region  # noqa: E402
 from clearscan_cv.pipeline import deskew_by_text_lines, enhance_image, estimate_textline_skew, process_file  # noqa: E402
 
 
@@ -51,6 +51,22 @@ def make_connected_document_with_bright_distractor() -> np.ndarray:
     cv2.fillConvexPoly(image, document, (188, 188, 180))
     for i in range(13):
         cv2.line(image, (120, 190 + i * 34), (500, 186 + i * 34), (68, 68, 65), 2, cv2.LINE_AA)
+    return image
+
+
+def make_hough_line_document() -> np.ndarray:
+    image = np.full((720, 960, 3), (112, 112, 108), dtype=np.uint8)
+    corners = np.array([[168, 128], [792, 104], [838, 606], [126, 648]], dtype=np.int32)
+
+    for start, end in zip(corners, np.roll(corners, -1, axis=0)):
+        vector = end - start
+        start_gap = start + vector * 0.06
+        end_gap = end - vector * 0.06
+        cv2.line(image, tuple(start_gap.astype(int)), tuple(end_gap.astype(int)), (236, 236, 230), 5, cv2.LINE_AA)
+
+    for index in range(9):
+        y = 190 + index * 34
+        cv2.line(image, (245, y), (680, y + (index % 2)), (138, 138, 134), 2, cv2.LINE_AA)
     return image
 
 
@@ -130,6 +146,15 @@ class PipelineTest(unittest.TestCase):
         detection = detect_connected_document_region(make_partial_bright_form())
 
         self.assertIsNone(detection)
+
+    def test_hough_fallback_detects_broken_document_edges(self) -> None:
+        detection = detect_hough_document_region(make_hough_line_document())
+
+        self.assertIsNotNone(detection)
+        assert detection is not None
+        self.assertTrue(detection.found)
+        self.assertEqual(detection.method, "hough_lines")
+        self.assertGreater(detection.area_ratio, 0.42)
 
     def test_enhancement_binary_output(self) -> None:
         result = enhance_image(make_synthetic_document(), mode="binary")
@@ -242,6 +267,8 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("shouldRejectPartialBrightQuad", html)
         self.assertIn("shouldRejectUnsafeFullFrameQuad", html)
         self.assertIn("detectConnectedPaperQuad", html)
+        self.assertIn("detectHoughLineQuad", html)
+        self.assertIn('method: "hough_lines"', html)
         self.assertIn("connected_paper", html)
         self.assertIn("orderQuadPoints", html)
         self.assertIn("* 0.006", html)
@@ -291,7 +318,7 @@ class PipelineTest(unittest.TestCase):
         worker = (ROOT / "src" / "clearscan_cv" / "static" / "sw.js").read_text(encoding="utf-8")
 
         self.assertIn("CACHE_NAME", worker)
-        self.assertIn("pocketcv-pdf-v7", worker)
+        self.assertIn("pocketcv-pdf-v8", worker)
         self.assertIn("install", worker)
         self.assertIn("fetch", worker)
         self.assertIn("event.request.mode === \"navigate\"", worker)
