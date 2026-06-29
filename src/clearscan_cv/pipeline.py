@@ -10,8 +10,8 @@ import numpy as np
 
 from .corners import CornerPoints, manual_detection_from_corners, scale_corner_points
 from .dewarp import dewarp_by_textline_columns
-from .geometry import detect_document_corners, ensure_bgr, four_point_transform
-from .model_hooks import apply_external_image_hook
+from .geometry import DocumentDetection, detect_document_corners, ensure_bgr, four_point_transform
+from .model_hooks import apply_external_corner_hook, apply_external_image_hook
 from .quality import assess_quality, compare_quality, diagnose_scan_quality
 
 OutputMode = Literal["auto", "color", "gray", "binary"]
@@ -489,6 +489,32 @@ def build_side_by_side(original: np.ndarray, processed: np.ndarray) -> np.ndarra
     return cv2.hconcat([left, gap, right])
 
 
+def _float_report_value(report: dict[str, object], key: str, default: float) -> float:
+    try:
+        value = float(report.get(key, default))
+    except (TypeError, ValueError):
+        return default
+    return float(np.clip(value, 0.0, 1.0)) if np.isfinite(value) else default
+
+
+def _detection_from_external_corners(corners: CornerPoints, width: int, height: int, report: dict[str, object]) -> DocumentDetection:
+    validated = manual_detection_from_corners(corners, width=width, height=height)
+    confidence = _float_report_value(report, "confidence", 0.86)
+    return DocumentDetection(
+        corners=validated.corners,
+        confidence=round(confidence, 3),
+        area_ratio=validated.area_ratio,
+        method="external_detector",
+        found=True,
+    )
+
+
+def _external_detector_pipeline_stage(report: dict[str, object], command: str | None) -> str:
+    if not command:
+        return "external_detector_disabled"
+    return "external_detector" if report.get("applied") else "external_detector_fallback"
+
+
 def enhance_image(
     image: np.ndarray,
     mode: OutputMode = "color",
@@ -497,6 +523,8 @@ def enhance_image(
     manual_corners: CornerPoints | None = None,
     manual_corners_space: CornerCoordinateSpace = "input",
     template_image: np.ndarray | None = None,
+    external_detector_command: str | None = None,
+    external_detector_timeout: float = 90.0,
     external_restorer_command: str | None = None,
     external_restorer_timeout: float = 180.0,
 ) -> EnhancementResult:
@@ -509,14 +537,43 @@ def enhance_image(
     source_height, source_width = source_bgr.shape[:2]
     bgr = limit_image_resolution(source_bgr)
     height, width = bgr.shape[:2]
+    external_detector_report: dict[str, object] = {
+        "stage": "external_detector",
+        "applied": False,
+        "method": "disabled",
+    }
     if manual_corners is not None:
         if manual_corners_space == "input":
             processed_corners = scale_corner_points(manual_corners, (source_width, source_height), (width, height))
         else:
             processed_corners = manual_corners
         detection = manual_detection_from_corners(processed_corners, width=width, height=height)
+        if external_detector_command:
+            external_detector_report = {
+                "stage": "external_detector",
+                "applied": False,
+                "method": "manual_corners_override",
+            }
     else:
-        detection = detect_document_corners(bgr)
+        if external_detector_command:
+            external_detector_result = apply_external_corner_hook(
+                bgr,
+                external_detector_command,
+                stage="external_detector",
+                timeout_seconds=external_detector_timeout,
+            )
+            external_detector_report = external_detector_result.report
+            if external_detector_result.corners is not None:
+                try:
+                    detection = _detection_from_external_corners(external_detector_result.corners, width, height, external_detector_report)
+                    external_detector_report.update({"applied": True, "document_detection": detection.to_dict()})
+                except ValueError as exc:
+                    external_detector_report.update({"applied": False, "reason": "invalid_detection_geometry", "error": str(exc)})
+                    detection = detect_document_corners(bgr)
+            else:
+                detection = detect_document_corners(bgr)
+        else:
+            detection = detect_document_corners(bgr)
     use_perspective = manual_corners is not None or (auto_warp and detection.found)
     warped = four_point_transform(bgr, detection.corners) if use_perspective else bgr.copy()
     dewarp_result = dewarp_by_textline_columns(warped) if auto_dewarp else None
@@ -561,6 +618,7 @@ def enhance_image(
         "source_image_size": {"width": source_width, "height": source_height},
         "processing_image_size": {"width": width, "height": height},
         "document_detection": detection.to_dict(),
+        "external_detector": external_detector_report,
         "dewarp": dewarp_result.report if dewarp_result is not None else {"applied": False, "method": "disabled"},
         "deskew": deskew_report,
         "external_restorer": external_result.report,
@@ -572,6 +630,7 @@ def enhance_image(
             perspective_confidence=float(detection.confidence) if detection.found else 0.0,
         ),
         "pipeline": [
+            _external_detector_pipeline_stage(external_detector_report, external_detector_command),
             "document_detection",
             "perspective_correction",
             "textline_dewarp",
@@ -596,6 +655,8 @@ def process_file(
     manual_corners_space: CornerCoordinateSpace = "input",
     output_stem: str | None = None,
     template_path: str | Path | None = None,
+    external_detector_command: str | None = None,
+    external_detector_timeout: float = 90.0,
     external_restorer_command: str | None = None,
     external_restorer_timeout: float = 180.0,
 ) -> dict[str, object]:
@@ -622,6 +683,8 @@ def process_file(
         manual_corners=manual_corners,
         manual_corners_space=manual_corners_space,
         template_image=template_image,
+        external_detector_command=external_detector_command,
+        external_detector_timeout=external_detector_timeout,
         external_restorer_command=external_restorer_command,
         external_restorer_timeout=external_restorer_timeout,
     )

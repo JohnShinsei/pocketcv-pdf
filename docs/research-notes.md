@@ -28,6 +28,19 @@ PocketCV PDF は、スマートフォンや PC ブラウザで完結する文書
 - `src/clearscan_cv/static/index.html`: `detectHoughLineQuad`
 - テスト: 断裂した紙面エッジだけを持つ合成ページで、`hough_lines` fallback が四隅を復元することを確認
 
+### 外部 detector hook による hybrid 文書検出
+
+OpenCV の contour / connected-component / Hough fallback で難しい写真に備え、YOLO や segmentation model などの外部文書検出器が四隅 JSON を返せる hook を追加しました。外部モデルは「紙面領域の検出」だけを担当し、検出された四点の検証、Homography、deskew、去陰影、二値化、OCR 用品質診断は既存の OpenCV パイプラインが担当します。
+
+コマンドが失敗した場合、JSON が壊れている場合、または四隅が小さすぎる場合は自動で従来検出へ戻り、`external_detector` レポートに理由を保存します。これにより、深度モデルを任意で試しながら、端末内・説明可能な CV パイプラインを壊さずに運用できます。
+
+実装箇所:
+
+- `src/clearscan_cv/model_hooks.py`: `apply_external_corner_hook`
+- `src/clearscan_cv/pipeline.py`: 外部 detector 優先、失敗時 OpenCV fallback
+- `src/clearscan_cv/cli.py`: `--external-detector-command`
+- テスト: 外部 detector の成功パスと失敗時 fallback を確認
+
 参照した考え方:
 
 - Jagannathan and Jawahar, "Perspective Correction Methods for Camera-Based Document Analysis", CBDAR 2005: 文書境界、文字行、レイアウト alignment を透視補正の手掛かりに使う。

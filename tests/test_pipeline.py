@@ -249,6 +249,29 @@ def make_external_restorer_command(script_path: Path, *, should_fail: bool = Fal
     return f'"{sys.executable}" "{script_path}" {{input}} {{output}}'
 
 
+def make_external_detector_command(script_path: Path, *, should_fail: bool = False) -> str:
+    if should_fail:
+        script_path.write_text("import sys\nsys.exit(7)\n", encoding="utf-8")
+    else:
+        script_path.write_text(
+            "\n".join(
+                [
+                    "import json",
+                    "import sys",
+                    "payload = {",
+                    "    'method': 'fake_segmentation',",
+                    "    'confidence': 0.88,",
+                    "    'corners': [[180, 90], [790, 130], [725, 630], [125, 580]],",
+                    "}",
+                    "with open(sys.argv[2], 'w', encoding='utf-8') as handle:",
+                    "    json.dump(payload, handle)",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    return f'"{sys.executable}" "{script_path}" {{input}} {{output}}'
+
+
 class PipelineTest(unittest.TestCase):
     def test_detects_document_quad(self) -> None:
         detection = detect_document_corners(make_synthetic_document())
@@ -433,6 +456,36 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(report["returncode"], 7)  # type: ignore[index]
         self.assertGreater(result.image.shape[0], 100)
 
+    def test_external_detector_hook_can_supply_document_corners(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            command = make_external_detector_command(Path(tmp) / "fake_detector.py")
+            result = enhance_image(make_synthetic_document(), mode="gray", external_detector_command=command)
+
+        detector_report = result.report["external_detector"]
+        document_detection = result.report["document_detection"]
+        self.assertTrue(detector_report["applied"])  # type: ignore[index]
+        self.assertTrue(detector_report["parsed"])  # type: ignore[index]
+        self.assertEqual(detector_report["detector_method"], "fake_segmentation")  # type: ignore[index]
+        self.assertEqual(document_detection["method"], "external_detector")  # type: ignore[index]
+        self.assertEqual(document_detection["confidence"], 0.88)  # type: ignore[index]
+        self.assertIn("external_detector", result.report["pipeline"])
+        self.assertGreater(result.image.shape[0], 400)
+        self.assertGreater(result.image.shape[1], 500)
+
+    def test_external_detector_hook_falls_back_to_opencv_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            command = make_external_detector_command(Path(tmp) / "failing_detector.py", should_fail=True)
+            result = enhance_image(make_synthetic_document(), mode="gray", external_detector_command=command)
+
+        detector_report = result.report["external_detector"]
+        document_detection = result.report["document_detection"]
+        self.assertFalse(detector_report["applied"])  # type: ignore[index]
+        self.assertEqual(detector_report["reason"], "nonzero_exit")  # type: ignore[index]
+        self.assertEqual(detector_report["returncode"], 7)  # type: ignore[index]
+        self.assertNotEqual(document_detection["method"], "external_detector")  # type: ignore[index]
+        self.assertIn("external_detector_fallback", result.report["pipeline"])
+        self.assertGreater(result.image.shape[0], 100)
+
     def test_template_guided_illumination_uses_form_template(self) -> None:
         template = make_clean_form_template()
         page = make_shadowed_form_photo()
@@ -549,6 +602,39 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(payload["manual_corners_space"], "input")
             self.assertEqual(payload["document_detection"]["method"], "manual_corners")
             self.assertEqual(payload["source_image_size"], {"width": 960, "height": 720})
+
+    def test_cli_accepts_external_detector_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_path = tmp_path / "input.jpg"
+            cv2.imwrite(str(input_path), make_synthetic_document())
+            detector_command = make_external_detector_command(tmp_path / "fake_detector.py")
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "clearscan_cv.cli",
+                    str(input_path),
+                    "--out",
+                    str(tmp_path / "out"),
+                    "--mode",
+                    "gray",
+                    "--external-detector-command",
+                    detector_command,
+                ],
+                cwd=ROOT,
+                env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertTrue(payload["external_detector"]["applied"])
+            self.assertEqual(payload["external_detector"]["detector_method"], "fake_segmentation")
+            self.assertEqual(payload["document_detection"]["method"], "external_detector")
 
     def test_static_app_generates_pdf_on_device(self) -> None:
         html = (ROOT / "src" / "clearscan_cv" / "static" / "index.html").read_text(encoding="utf-8")

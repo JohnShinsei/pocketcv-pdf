@@ -42,6 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-warp", action="store_true", help="Disable automatic perspective correction.")
     parser.add_argument("--template-image", help="Optional ideal form/template image for template-guided illumination correction.")
     parser.add_argument(
+        "--external-detector-command",
+        help="Trusted local command for an optional document corner detector. Use {input} and {output} placeholders; output JSON corners.",
+    )
+    parser.add_argument("--external-detector-timeout", type=float, default=90.0, help="Timeout in seconds for the external detector command.")
+    parser.add_argument(
         "--external-restorer-command",
         help="Trusted local command for an optional deep restoration stage. Use {input} and {output} placeholders.",
     )
@@ -138,6 +143,8 @@ def run_demo(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         manual_corners=manual_corners,
         manual_corners_space=args.corners_space,
         template_path=args.template_image,
+        external_detector_command=args.external_detector_command,
+        external_detector_timeout=args.external_detector_timeout,
         external_restorer_command=args.external_restorer_command,
         external_restorer_timeout=args.external_restorer_timeout,
     )
@@ -162,6 +169,7 @@ def run_demo(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "source_image_size": scan_report.get("source_image_size"),
         "processing_image_size": scan_report.get("processing_image_size"),
         "document_detection": scan_report.get("document_detection"),
+        "external_detector": scan_report.get("external_detector"),
         "dewarp": scan_report.get("dewarp"),
         "deskew": scan_report.get("deskew"),
         "external_restorer": scan_report.get("external_restorer"),
