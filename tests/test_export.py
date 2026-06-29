@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 
 import cv2
 import numpy as np
@@ -14,7 +15,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from clearscan_cv.export import build_pdf_bytes, write_pdf  # noqa: E402
+from clearscan_cv.export import build_docx_bytes, build_pdf_bytes, write_docx, write_pdf  # noqa: E402
 from clearscan_cv.ocr import OcrLine, OcrResult  # noqa: E402
 
 
@@ -88,6 +89,32 @@ class ExportTest(unittest.TestCase):
             self.assertTrue(pdf_path.exists())
             self.assertFalse(payload["pdf"]["searchable"])
             self.assertTrue(pdf_path.read_bytes().startswith(b"%PDF-1.4"))
+
+    def test_builds_docx_from_recovered_markdown(self) -> None:
+        payload = build_docx_bytes("## 診断\n\n本文テキスト", title="OCR Result")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            docx_path = Path(tmp) / "result.docx"
+            docx_path.write_bytes(payload)
+            with zipfile.ZipFile(docx_path) as docx:
+                names = set(docx.namelist())
+                document_xml = docx.read("word/document.xml").decode("utf-8")
+
+        self.assertIn("[Content_Types].xml", names)
+        self.assertIn("word/document.xml", names)
+        self.assertIn("word/styles.xml", names)
+        self.assertIn("OCR Result", document_xml)
+        self.assertIn("診断", document_xml)
+        self.assertIn("本文テキスト", document_xml)
+        self.assertIn('w:pStyle w:val="Heading2"', document_xml)
+
+    def test_write_docx_reports_output_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            export = write_docx("## Heading\n\nBody", Path(tmp) / "layout.docx", title="PocketCV")
+
+            self.assertTrue(Path(export.path).exists())
+            self.assertEqual(export.title, "PocketCV")
+            self.assertEqual(export.paragraph_count, 3)
 
 
 if __name__ == "__main__":

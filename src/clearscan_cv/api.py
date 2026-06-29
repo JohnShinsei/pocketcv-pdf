@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 
 from .evaluation import evaluate_readability
-from .export import build_pdf_bytes
+from .export import build_docx_bytes, build_pdf_bytes
 from .ocr import OcrUnavailableError, recognize_image, recover_layout_markdown
 from .pipeline import enhance_image
 
@@ -60,6 +60,7 @@ async def process_upload(
     ocr_engine: str = Form("auto"),
     pdf: bool = Form(False),
     searchable_pdf: bool = Form(False),
+    docx: bool = Form(False),
     readability: bool = Form(False),
     expected_text: str | None = Form(None),
 ) -> dict[str, object]:
@@ -82,13 +83,17 @@ async def process_upload(
         "report": result.report,
     }
     ocr_result = None
-    if ocr or searchable_pdf:
+    if ocr or searchable_pdf or docx:
         try:
             ocr_result = recognize_image(result.image, language=ocr_lang, engine=ocr_engine)  # type: ignore[arg-type]
         except OcrUnavailableError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         response["ocr"] = ocr_result.to_dict()
         response["layout_markdown"] = recover_layout_markdown(ocr_result)
+    if docx:
+        markdown = str(response.get("layout_markdown") or "")
+        docx_bytes = build_docx_bytes(markdown or (ocr_result.text if ocr_result else ""), title=Path(file.filename or "pocketcv-scan").stem)
+        response["docx_base64"] = base64.b64encode(docx_bytes).decode("ascii")
     if pdf or searchable_pdf:
         pdf_bytes = build_pdf_bytes(
             result.image,

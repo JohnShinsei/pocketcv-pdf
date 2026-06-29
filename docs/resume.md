@@ -2,7 +2,7 @@
 
 ## One-line project description
 
-PocketCV PDF is a privacy-first mobile document scanner that captures or imports phone photos, enhances them into standalone scanned images/PDFs, runs browser-side OCR, and restores OCR output into Markdown document structure.
+PocketCV PDF is a privacy-first mobile document scanner that captures or imports phone photos, enhances them into standalone scanned images/PDFs, runs OCR, and restores OCR output into searchable PDF, Markdown, and DOCX document formats.
 
 ## Resume bullets
 
@@ -11,7 +11,9 @@ PocketCV PDF is a privacy-first mobile document scanner that captures or imports
 - Designed a public GitHub-ready project with a Python package, CLI, optional FastAPI dev server, synthetic image tests, and reproducible sample generation.
 - Implemented quality metrics such as Laplacian sharpness, contrast, edge density, exposure balance, and score deltas to make image enhancement measurable.
 - Added browser-side Tesseract.js OCR over the enhanced scan output with copy and TXT export, structured as the second stage before document layout recovery.
-- Implemented layout recovery heuristics that use OCR line bounding boxes to detect columns, headings, and paragraphs, then export Markdown.
+- Implemented Python-side optional OCR adapters for RapidOCR, Tesseract, and PaddleOCR, normalizing output into line/word bounding boxes and confidence scores.
+- Implemented layout recovery heuristics that use OCR line bounding boxes to detect columns, headings, and paragraphs, then export Markdown and DOCX.
+- Added searchable PDF export with hidden OCR text layers plus OCR readability metrics such as confidence, edit distance, CER, and textline horizontal score.
 
 ## Interview talking points
 
@@ -22,3 +24,4 @@ PocketCV PDF is a privacy-first mobile document scanner that captures or imports
 - How the project handles failure cases by falling back to the original image border with low confidence.
 - Why synthetic test images are useful for public computer vision repositories when real user documents cannot be committed.
 - Why OCR should consume the cleaned scan output instead of raw phone photos, and how OCR positions can be converted into readable Markdown structure.
+- How OCR confidence, CER, edit distance, and textline horizontality create a feedback loop for tuning image-processing parameters.

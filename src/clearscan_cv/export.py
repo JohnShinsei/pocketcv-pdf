@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import io
 from pathlib import Path
+import re
+from xml.sax.saxutils import escape
+import zipfile
 import zlib
 
 import cv2
@@ -31,6 +35,16 @@ class PdfExport:
             "searchable": self.searchable,
             "text_lines": self.text_lines,
         }
+
+
+@dataclass(frozen=True)
+class DocxExport:
+    path: str
+    paragraph_count: int
+    title: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {"path": self.path, "paragraph_count": self.paragraph_count, "title": self.title}
 
 
 class _PdfBuilder:
@@ -184,3 +198,135 @@ def write_pdf(
     image_height, image_width = image.shape[:2]
     text_lines = len([line for line in (ocr_result.lines if ocr_result else []) if line.text.strip()]) if searchable else 0
     return PdfExport(path=str(output_path), width=image_width, height=image_height, searchable=searchable and text_lines > 0, text_lines=text_lines)
+
+
+def _content_types_xml() -> str:
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>
+"""
+
+
+def _root_relationships_xml() -> str:
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>
+"""
+
+
+def _document_relationships_xml() -> str:
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>
+"""
+
+
+def _styles_xml() -> str:
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
+    <w:name w:val="Normal"/>
+    <w:qFormat/>
+    <w:rPr><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Title">
+    <w:name w:val="Title"/>
+    <w:qFormat/>
+    <w:pPr><w:spacing w:after="240"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="34"/><w:szCs w:val="34"/></w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Heading2">
+    <w:name w:val="heading 2"/>
+    <w:basedOn w:val="Normal"/>
+    <w:qFormat/>
+    <w:pPr><w:spacing w:before="180" w:after="80"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>
+  </w:style>
+</w:styles>
+"""
+
+
+def _core_properties_xml(title: str) -> str:
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>{escape(title)}</dc:title>
+  <dc:creator>PocketCV PDF</dc:creator>
+  <cp:lastModifiedBy>PocketCV PDF</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">{now}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">{now}</dcterms:modified>
+</cp:coreProperties>
+"""
+
+
+def _app_properties_xml() -> str:
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>PocketCV PDF</Application>
+  <DocSecurity>0</DocSecurity>
+  <ScaleCrop>false</ScaleCrop>
+  <Company>PocketCV PDF</Company>
+</Properties>
+"""
+
+
+def _paragraph_xml(text: str, style: str | None = None) -> str:
+    escaped = escape(text)
+    style_xml = f'<w:pPr><w:pStyle w:val="{style}"/></w:pPr>' if style else ""
+    return f"<w:p>{style_xml}<w:r><w:t xml:space=\"preserve\">{escaped}</w:t></w:r></w:p>"
+
+
+def _markdown_paragraphs(markdown: str, title: str) -> tuple[list[str], int]:
+    paragraphs = [_paragraph_xml(title, style="Title")]
+    count = 1
+    for block in re.split(r"\n\s*\n", markdown.strip()):
+        cleaned = block.strip()
+        if not cleaned:
+            continue
+        if cleaned.startswith("## "):
+            paragraphs.append(_paragraph_xml(cleaned[3:].strip(), style="Heading2"))
+        else:
+            paragraphs.append(_paragraph_xml(re.sub(r"\s*\n\s*", " ", cleaned)))
+        count += 1
+    return paragraphs, count
+
+
+def build_docx_bytes(markdown: str, title: str = "PocketCV OCR") -> bytes:
+    paragraphs, _count = _markdown_paragraphs(markdown, title)
+    document_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    {''.join(paragraphs)}
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>
+  </w:body>
+</w:document>
+"""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as docx:
+        docx.writestr("[Content_Types].xml", _content_types_xml())
+        docx.writestr("_rels/.rels", _root_relationships_xml())
+        docx.writestr("word/_rels/document.xml.rels", _document_relationships_xml())
+        docx.writestr("word/document.xml", document_xml)
+        docx.writestr("word/styles.xml", _styles_xml())
+        docx.writestr("docProps/core.xml", _core_properties_xml(title))
+        docx.writestr("docProps/app.xml", _app_properties_xml())
+    return buffer.getvalue()
+
+
+def write_docx(markdown: str, output_path: str | Path, title: str = "PocketCV OCR") -> DocxExport:
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = build_docx_bytes(markdown, title=title)
+    output_path.write_bytes(payload)
+    _paragraphs, paragraph_count = _markdown_paragraphs(markdown, title)
+    return DocxExport(path=str(output_path), paragraph_count=paragraph_count, title=title)

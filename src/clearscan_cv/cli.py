@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 from .evaluation import evaluate_readability
-from .export import write_pdf
+from .export import write_docx, write_pdf
 from .ocr import OcrUnavailableError, recognize_image, recover_layout_markdown
 from .pipeline import process_file
 
@@ -33,6 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional OCR backend. Auto prefers Tesseract for Japanese and RapidOCR for Chinese/English.",
     )
     parser.add_argument("--layout", action="store_true", help="Recover a simple Markdown layout from OCR line boxes.")
+    parser.add_argument("--docx", action="store_true", help="Write recovered OCR layout as a DOCX document.")
     return parser
 
 
@@ -58,7 +59,8 @@ def main(argv: list[str] | None = None) -> int:
     output_image: np.ndarray | None = None
     ocr_result = None
     expected_text = Path(args.expected_text).read_text(encoding="utf-8") if args.expected_text else None
-    if args.ocr or args.layout or args.searchable_pdf:
+    layout_markdown: str | None = None
+    if args.ocr or args.layout or args.searchable_pdf or args.docx:
         output_image = _read_image(output_path)
         try:
             ocr_result = recognize_image(output_image, language=args.ocr_lang, engine=args.ocr_engine)
@@ -72,8 +74,17 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.layout:
             layout_path = output_path.with_name(f"{output_path.stem}_layout.md")
-            layout_path.write_text(recover_layout_markdown(ocr_result), encoding="utf-8")
+            layout_markdown = recover_layout_markdown(ocr_result)
+            layout_path.write_text(layout_markdown, encoding="utf-8")
             report["ocr_layout_path"] = str(layout_path)
+
+        if args.docx:
+            if layout_markdown is None:
+                layout_markdown = recover_layout_markdown(ocr_result)
+            docx_path = output_path.with_name(f"{output_path.stem}_layout.docx")
+            docx_export = write_docx(layout_markdown or ocr_result.text, docx_path, title=Path(args.input).stem)
+            report["docx"] = docx_export.to_dict()
+            report["docx_path"] = str(docx_path)
 
     if args.readability or ocr_result is not None:
         if output_image is None:
@@ -94,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
         report["pdf"] = pdf_export.to_dict()
         report["pdf_path"] = str(pdf_path)
 
-    if args.ocr or args.layout or args.pdf or args.searchable_pdf or args.readability:
+    if args.ocr or args.layout or args.pdf or args.searchable_pdf or args.readability or args.docx:
         Path(str(report["report_path"])).write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2))
     return 0
