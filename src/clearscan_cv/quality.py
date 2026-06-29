@@ -16,6 +16,25 @@ def _target_score(value: float, target: float, tolerance: float) -> float:
     return float(np.clip(1.0 - abs(value - target) / tolerance, 0.0, 1.0))
 
 
+def _odd_metric_kernel(size: int, minimum: int = 31, maximum: int = 201) -> int:
+    size = max(minimum, min(maximum, size))
+    return size + 1 if size % 2 == 0 else size
+
+
+def _shadow_residual(gray: np.ndarray) -> float:
+    height, width = gray.shape[:2]
+    kernel_size = _odd_metric_kernel(int(min(height, width) / 9))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    background = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel, iterations=1)
+    background = cv2.GaussianBlur(background, (kernel_size, kernel_size), 0)
+    low, high = np.percentile(background, [5, 95])
+    return float(max(0.0, high - low))
+
+
+def _boldness_risk(ink_density: float) -> float:
+    return float(np.clip((ink_density - 0.085) / 0.095, 0.0, 1.0))
+
+
 def assess_quality(image: np.ndarray) -> dict[str, float | int | str]:
     bgr = ensure_bgr(image)
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
@@ -36,13 +55,19 @@ def assess_quality(image: np.ndarray) -> dict[str, float | int | str]:
     overexposed = float(np.mean(metric_gray > 252))
     exposure_balance = max(0.0, 1.0 - underexposed * 2.0 - max(0.0, overexposed - 0.55) * 1.25)
     paper_tone = _target_score(brightness, target=222.0, tolerance=95.0)
+    shadow_residual = _shadow_residual(metric_gray)
+    shadow_score = float(np.clip(1.0 - (shadow_residual - 12.0) / 58.0, 0.0, 1.0))
+    ink_density = float(np.mean(metric_gray < 128))
+    boldness_risk = _boldness_risk(ink_density)
 
     score = (
-        _clip_score(sharpness, 40.0, 450.0) * 30.0
-        + _clip_score(contrast, 18.0, 75.0) * 25.0
-        + _clip_score(edge_density, 0.015, 0.12) * 20.0
-        + paper_tone * 15.0
-        + exposure_balance * 10.0
+        _clip_score(sharpness, 40.0, 450.0) * 24.0
+        + _clip_score(contrast, 18.0, 75.0) * 21.0
+        + _clip_score(edge_density, 0.015, 0.12) * 18.0
+        + paper_tone * 13.0
+        + exposure_balance * 8.0
+        + shadow_score * 11.0
+        + (1.0 - boldness_risk) * 5.0
     )
     grade = "excellent" if score >= 82 else "good" if score >= 65 else "review"
 
@@ -55,6 +80,10 @@ def assess_quality(image: np.ndarray) -> dict[str, float | int | str]:
         "edge_density": round(edge_density, 4),
         "exposure_balance": round(exposure_balance, 4),
         "paper_tone": round(paper_tone, 4),
+        "shadow_residual": round(shadow_residual, 2),
+        "shadow_score": round(shadow_score, 4),
+        "ink_density": round(ink_density, 4),
+        "boldness_risk": round(boldness_risk, 4),
         "score": round(float(score), 2),
         "grade": grade,
     }

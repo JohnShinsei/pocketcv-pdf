@@ -171,6 +171,7 @@ clearscan --ocr-status --ocr-lang jpn+eng
 - `*_layout.md`: OCR 行座標から復元した Markdown
 - `*_layout.docx`: 復元文書の Word 互換 DOCX
 - `readability`: report 内の OCR 信頼度、低信頼行比率、文字編集距離、CER、文字行水平度
+- `quality`: report 内の影ムラ残り、影スコア、文字墨量、加太りリスク、エッジ密度、コントラスト
 
 Python 版の OCR エンジンは任意依存です。軽量に試す場合は `.[ocr]` で Tesseract ラッパー、ONNX ベースの端末側 OCR を試す場合は `.[rapidocr]`、PaddleOCR を使う場合は `.[paddleocr]` を追加します。Tesseract を使う場合は、別途 Tesseract 本体と言語データも必要です。OCR 依存を入れていない環境でも、画像処理パイプラインはそのまま動作します。
 

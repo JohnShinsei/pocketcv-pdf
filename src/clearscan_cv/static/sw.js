@@ -1,4 +1,4 @@
-const CACHE_NAME = "pocketcv-pdf-v15";
+const CACHE_NAME = "pocketcv-pdf-v16";
 const APP_SHELL = ["./", "manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {

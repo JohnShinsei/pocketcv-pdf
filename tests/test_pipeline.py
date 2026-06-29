@@ -28,6 +28,7 @@ from clearscan_cv.pipeline import (  # noqa: E402
     process_file,
     rotate_image_keep_content,
 )
+from clearscan_cv.quality import assess_quality  # noqa: E402
 
 
 def make_synthetic_document() -> np.ndarray:
@@ -349,12 +350,28 @@ class PipelineTest(unittest.TestCase):
         self.assertLess(after_delta, 18)
         self.assertGreater(float(np.std(text_region)), 35)
 
+    def test_quality_metrics_report_shadow_and_boldness_risk(self) -> None:
+        page = make_heavy_shadow_page()
+        raw = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
+        corrected = enhance_image(page, mode="gray", auto_warp=False).image
+        before = assess_quality(raw)
+        after = assess_quality(corrected)
+
+        self.assertIn("shadow_residual", after)
+        self.assertIn("shadow_score", after)
+        self.assertIn("ink_density", after)
+        self.assertIn("boldness_risk", after)
+        self.assertGreater(float(before["shadow_residual"]), 50.0)
+        self.assertLess(float(after["shadow_residual"]), float(before["shadow_residual"]) * 0.35)
+        self.assertLess(float(after["boldness_risk"]), 0.2)
+
     def test_binary_enhancement_keeps_antialias_text_from_becoming_bold(self) -> None:
         result = enhance_image(make_soft_antialiased_text_page(), mode="binary", auto_warp=False)
         black_ratio = float(np.mean(result.image < 128))
 
         self.assertGreater(black_ratio, 0.01)
         self.assertLess(black_ratio, 0.055)
+        self.assertLess(float(assess_quality(result.image)["boldness_risk"]), 0.2)
 
     def test_binary_enhancement_removes_near_edge_artifacts(self) -> None:
         result = enhance_image(make_near_edge_artifact_page(), mode="binary", auto_warp=False)
@@ -429,6 +446,12 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("warpPerspectiveCanvas", html)
         self.assertIn("edgeCanvas", html)
         self.assertIn("qualityScore", html)
+        self.assertIn("assessOutputScanMetrics", html)
+        self.assertIn("shadowResidual", html)
+        self.assertIn("shadowScore", html)
+        self.assertIn("inkDensity", html)
+        self.assertIn("boldnessRisk", html)
+        self.assertIn("paperGrayResidue", html)
         self.assertIn("MAX_SOURCE_IMAGE_EDGE = 3200", html)
         self.assertIn("MAX_SOURCE_IMAGE_PIXELS = 6500000", html)
         self.assertIn("PDF_MAX_IMAGE_EDGE = 3200", html)
@@ -520,6 +543,9 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("nearOuterEdge", html)
         self.assertIn("removeNearEdgeBlob", html)
         self.assertIn("文字行傾き補正", html)
+        self.assertIn("影ムラ残り", html)
+        self.assertIn("文字の墨量", html)
+        self.assertIn("加太りリスク", html)
         self.assertIn("件目を上へ移動", html)
         self.assertIn("端末内でPDFを生成中", html)
         self.assertIn("PocketCV 画像処理レポート", html)
@@ -558,7 +584,7 @@ class PipelineTest(unittest.TestCase):
         worker = (ROOT / "src" / "clearscan_cv" / "static" / "sw.js").read_text(encoding="utf-8")
 
         self.assertIn("CACHE_NAME", worker)
-        self.assertIn("pocketcv-pdf-v15", worker)
+        self.assertIn("pocketcv-pdf-v16", worker)
         self.assertIn("install", worker)
         self.assertIn("fetch", worker)
         self.assertIn("event.request.mode === \"navigate\"", worker)

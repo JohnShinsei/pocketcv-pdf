@@ -2973,6 +2973,14 @@
         return percentileFromHistogram(histogram, total, percentile);
       }
 
+      function percentileFromSortedValues(values, percentile) {
+        if (!values.length) {
+          return 0;
+        }
+        const index = clamp(Math.floor((values.length - 1) * percentile), 0, values.length - 1);
+        return values[index];
+      }
+
       function smoothTileValues(values, gridWidth, gridHeight) {
         const smoothed = new Float32Array(values.length);
         for (let y = 0; y < gridHeight; y += 1) {
@@ -3144,6 +3152,53 @@
             whiteComponent(area);
           }
         }
+      }
+
+      function assessOutputScanMetrics(data, width, height, tileSize) {
+        const gridWidth = Math.ceil(width / tileSize);
+        const gridHeight = Math.ceil(height / tileSize);
+        const tileSums = new Float64Array(gridWidth * gridHeight);
+        const tileCounts = new Uint32Array(gridWidth * gridHeight);
+        const step = Math.max(1, Math.floor(Math.max(width, height) / 1200));
+        let darkCount = 0;
+        let grayResidueCount = 0;
+        let samples = 0;
+
+        for (let y = 0; y < height; y += step) {
+          for (let x = 0; x < width; x += step) {
+            const index = (y * width + x) * 4;
+            const value = luminance(data[index], data[index + 1], data[index + 2]);
+            samples += 1;
+            if (value < 128) {
+              darkCount += 1;
+            }
+            if (value >= 128 && value < 218) {
+              grayResidueCount += 1;
+            }
+            if (value > 126) {
+              const tileX = Math.floor(x / tileSize);
+              const tileY = Math.floor(y / tileSize);
+              const tileIndex = tileY * gridWidth + tileX;
+              tileSums[tileIndex] += value;
+              tileCounts[tileIndex] += 1;
+            }
+          }
+        }
+
+        const paperMeans = [];
+        for (let index = 0; index < tileSums.length; index += 1) {
+          if (tileCounts[index] > 8) {
+            paperMeans.push(tileSums[index] / tileCounts[index]);
+          }
+        }
+        paperMeans.sort((a, b) => a - b);
+        const shadowResidual =
+          percentileFromSortedValues(paperMeans, 0.95) - percentileFromSortedValues(paperMeans, 0.05);
+        const inkDensity = darkCount / Math.max(1, samples);
+        const boldnessRisk = clamp((inkDensity - 0.085) / 0.095, 0, 1);
+        const paperGrayResidue = grayResidueCount / Math.max(1, samples);
+        const shadowScore = clamp(1 - (shadowResidual - 10) / 52, 0, 1);
+        return { shadowResidual, shadowScore, inkDensity, boldnessRisk, paperGrayResidue };
       }
 
       function enhanceCanvas(sourceCanvas, mode, detection) {
@@ -3407,15 +3462,18 @@
           cleanupBinaryImageData(data, sourceCanvas.width, sourceCanvas.height);
         }
 
+        const scanMetrics = assessOutputScanMetrics(data, sourceCanvas.width, sourceCanvas.height, tileSize);
         outputContext.putImageData(image, 0, 0);
         edgeContext.putImageData(edgeImage, 0, 0);
         const mean = sum / Math.max(1, pixelCount);
         const contrast = Math.sqrt(Math.max(0, sumSquares / Math.max(1, pixelCount) - mean * mean));
-        const qualityScore = clamp(
+        const baseQuality =
           (detection.found ? detection.confidence * 32 : 10) +
-            clamp(contrast / 95, 0, 1) * 28 +
-            clamp(edgeCount / Math.max(1, pixelCount) / 0.16, 0, 1) * 28 +
-            clamp((mean - 90) / 150, 0, 1) * 12,
+          clamp(contrast / 95, 0, 1) * 28 +
+          clamp(edgeCount / Math.max(1, pixelCount) / 0.16, 0, 1) * 28 +
+          clamp((mean - 90) / 150, 0, 1) * 12;
+        const qualityScore = clamp(
+          baseQuality - (1 - scanMetrics.shadowScore) * 10 - scanMetrics.boldnessRisk * 8 - scanMetrics.paperGrayResidue * 16,
           0,
           100
         );
@@ -3434,6 +3492,11 @@
             backgroundRange,
             useFrequencyDeshadow,
             useGatosSauvola,
+            shadowResidual: scanMetrics.shadowResidual,
+            shadowScore: scanMetrics.shadowScore,
+            inkDensity: scanMetrics.inkDensity,
+            boldnessRisk: scanMetrics.boldnessRisk,
+            paperGrayResidue: scanMetrics.paperGrayResidue,
           },
         };
       }
@@ -3483,6 +3546,9 @@
           ["総合品質", `${Math.round(metrics.qualityScore)} / 100`],
           ["透視補正信頼度", `${Math.round(metrics.perspectiveConfidence * 100)}%`],
           ["文字行傾き補正", `${Math.round((metrics.deskewAngle || 0) * 10) / 10}°`],
+          ["影ムラ残り", `${Math.round((metrics.shadowResidual || 0) * 10) / 10}`],
+          ["文字の墨量", `${Math.round((metrics.inkDensity || 0) * 1000) / 10}%`],
+          ["加太りリスク", `${Math.round((metrics.boldnessRisk || 0) * 100)}%`],
           ["エッジ密度", `${Math.round(metrics.edgeDensity * 1000) / 10}%`],
           ["コントラスト", `${Math.round(metrics.contrast * 10) / 10}`],
           ["二値化しきい値", `${metrics.threshold}`],
@@ -3502,10 +3568,10 @@
         });
 
         context.fillStyle = "#d9dee8";
-        context.fillRect(64, 1378, 1072, 2);
+        context.fillRect(64, 1462, 1072, 2);
         context.font = "700 22px 'Yu Gothic', 'Noto Sans JP', Arial, sans-serif";
         context.fillStyle = "#687386";
-        context.fillText("ブラウザ内で生成。画像はアップロードされません。", 64, 1434);
+        context.fillText("ブラウザ内で生成。画像はアップロードされません。", 64, 1518);
         return report;
       }
 
