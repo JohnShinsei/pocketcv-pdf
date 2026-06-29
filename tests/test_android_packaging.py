@@ -18,6 +18,11 @@ class AndroidPackagingTest(unittest.TestCase):
         self.assertIn("自動角に戻す", source)
         self.assertIn("端末内OpenCVでスキャン", source)
         self.assertIn("OnDeviceScanner.process", source)
+        self.assertIn("PNG共有", source)
+        self.assertIn("PDF共有", source)
+        self.assertIn("DOCX共有", source)
+        self.assertIn("FileProvider.getUriForFile", source)
+        self.assertIn("Intent.ACTION_SEND", source)
         self.assertIn("manualCornersForSource", source)
         self.assertIn('"corners_space", "input"', source)
         self.assertIn("カメラで撮影", source)
@@ -33,8 +38,11 @@ class AndroidPackagingTest(unittest.TestCase):
 
     def test_android_app_bundles_opencv_for_on_device_scanning(self) -> None:
         build = (ROOT / "android" / "app" / "build.gradle").read_text(encoding="utf-8")
+        gradle_properties = (ROOT / "android" / "gradle.properties").read_text(encoding="utf-8")
         scanner = (ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "pocketcv" / "pdf" / "OnDeviceScanner.java").read_text(encoding="utf-8")
 
+        self.assertIn("android.useAndroidX=true", gradle_properties)
+        self.assertIn('implementation "androidx.core:core:', build)
         self.assertIn('implementation "org.opencv:opencv:4.13.0"', build)
         self.assertIn("Imgproc.getPerspectiveTransform", scanner)
         self.assertIn("Imgproc.warpPerspective", scanner)
@@ -43,8 +51,13 @@ class AndroidPackagingTest(unittest.TestCase):
         self.assertIn("manual_overlay_homography", scanner)
         self.assertIn("PdfDocument", scanner)
         manifest = (ROOT / "android" / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
+        file_paths = (ROOT / "android" / "app" / "src" / "main" / "res" / "xml" / "file_paths.xml").read_text(encoding="utf-8")
 
         self.assertIn("android.hardware.camera.any", manifest)
+        self.assertIn("androidx.core.content.FileProvider", manifest)
+        self.assertIn("${applicationId}.fileprovider", manifest)
+        self.assertIn("cache-path", file_paths)
+        self.assertIn("shared/", file_paths)
 
     def test_android_workflow_uploads_debug_apk(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "android.yml").read_text(encoding="utf-8")
@@ -84,6 +97,8 @@ class AndroidPackagingTest(unittest.TestCase):
         self.assertIn("自動角に戻す", emulator_qa_script)
         self.assertIn("四隅調整OK", emulator_qa_script)
         self.assertIn("端末内OpenCVでスキャン", emulator_qa_script)
+        self.assertIn("PNG共有", emulator_qa_script)
+        self.assertIn("PDF共有", emulator_qa_script)
         self.assertIn("PC後端でスキャン生成", emulator_qa_script)
 
 

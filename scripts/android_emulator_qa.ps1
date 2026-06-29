@@ -243,6 +243,8 @@ Tap-UiNode -UiPath $selectedUi -Text "自動角に戻す"
 $selectedUi = Wait-UiContains "四隅調整OK" 45 "ui-corners-reset.xml"
 Tap-UiNode -UiPath $selectedUi -Text "端末内OpenCVでスキャン"
 $offlineUi = Wait-UiContains "端末内処理完了" 90 "ui-on-device-processed.xml"
+Find-NodeCenter -UiPath $offlineUi -Text "PNG共有" | Out-Null
+Find-NodeCenter -UiPath $offlineUi -Text "PDF共有" | Out-Null
 Write-Host "Android app processed the sample image on device via OpenCV."
 
 Tap-UiNode -UiPath $offlineUi -Text "PC後端でスキャン生成"

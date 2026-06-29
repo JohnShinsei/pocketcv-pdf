@@ -25,10 +25,14 @@ import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 
+import androidx.core.content.FileProvider;
+
 import org.json.JSONObject;
 import org.opencv.android.OpenCVLoader;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -62,6 +66,9 @@ public class MainActivity extends Activity {
     private Button saveImageButton;
     private Button savePdfButton;
     private Button saveDocxButton;
+    private Button shareImageButton;
+    private Button sharePdfButton;
+    private Button shareDocxButton;
     private boolean opencvReady;
     private String opencvStatus = "";
     private boolean busy;
@@ -179,6 +186,16 @@ public class MainActivity extends Activity {
         saveRow.addView(saveDocxButton, rowWeight());
         root.addView(saveRow, matchWidth());
 
+        LinearLayout shareRow = new LinearLayout(this);
+        shareRow.setOrientation(LinearLayout.HORIZONTAL);
+        shareImageButton = shareButton("PNG共有", REQ_SAVE_IMAGE);
+        sharePdfButton = shareButton("PDF共有", REQ_SAVE_PDF);
+        shareDocxButton = shareButton("DOCX共有", REQ_SAVE_DOCX);
+        shareRow.addView(shareImageButton, rowWeight());
+        shareRow.addView(sharePdfButton, rowWeight());
+        shareRow.addView(shareDocxButton, rowWeight());
+        root.addView(shareRow, matchWidth());
+
         statusText = new TextView(this);
         statusText.setText(opencvReady ? "画像待ち · OpenCV準備OK" : "画像待ち · OpenCV未初期化");
         statusText.setPadding(0, 10, 0, 10);
@@ -267,6 +284,14 @@ public class MainActivity extends Activity {
         button.setText(label);
         button.setEnabled(false);
         button.setOnClickListener(v -> saveLatest(requestCode));
+        return button;
+    }
+
+    private Button shareButton(String label, int requestCode) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setEnabled(false);
+        button.setOnClickListener(v -> shareLatest(requestCode));
         return button;
     }
 
@@ -598,6 +623,34 @@ public class MainActivity extends Activity {
         startActivityForResult(intent, requestCode);
     }
 
+    private void shareLatest(int requestCode) {
+        byte[] bytes = bytesForRequest(requestCode);
+        if (bytes == null) {
+            setStatus("共有するファイルがありません。");
+            return;
+        }
+        try {
+            File directory = new File(getCacheDir(), "shared");
+            if (!directory.exists() && !directory.mkdirs()) {
+                throw new IllegalStateException("共有用フォルダを作成できません。");
+            }
+            File file = new File(directory, outputName(suffixForRequest(requestCode)));
+            try (FileOutputStream out = new FileOutputStream(file)) {
+                out.write(bytes);
+            }
+            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", file);
+            Intent intent = new Intent(Intent.ACTION_SEND);
+            intent.setType(mimeForRequest(requestCode));
+            intent.putExtra(Intent.EXTRA_STREAM, uri);
+            intent.putExtra(Intent.EXTRA_SUBJECT, file.getName());
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(intent, "スキャンファイルを共有"));
+            setStatus("共有ファイルを準備しました");
+        } catch (Exception error) {
+            setStatus("共有失敗: " + error.getMessage());
+        }
+    }
+
     private byte[] bytesForRequest(int requestCode) {
         if (requestCode == REQ_SAVE_PDF) {
             return latestPdfBytes;
@@ -606,6 +659,26 @@ public class MainActivity extends Activity {
             return latestDocxBytes;
         }
         return latestImageBytes;
+    }
+
+    private String mimeForRequest(int requestCode) {
+        if (requestCode == REQ_SAVE_PDF) {
+            return "application/pdf";
+        }
+        if (requestCode == REQ_SAVE_DOCX) {
+            return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        }
+        return "image/png";
+    }
+
+    private String suffixForRequest(int requestCode) {
+        if (requestCode == REQ_SAVE_PDF) {
+            return ".pdf";
+        }
+        if (requestCode == REQ_SAVE_DOCX) {
+            return ".docx";
+        }
+        return "-scan.png";
     }
 
     private String outputName(String suffix) {
@@ -617,6 +690,9 @@ public class MainActivity extends Activity {
         saveImageButton.setEnabled(latestImageBytes != null);
         savePdfButton.setEnabled(latestPdfBytes != null);
         saveDocxButton.setEnabled(latestDocxBytes != null);
+        shareImageButton.setEnabled(latestImageBytes != null);
+        sharePdfButton.setEnabled(latestPdfBytes != null);
+        shareDocxButton.setEnabled(latestDocxBytes != null);
         if (processButton != null) {
             processButton.setEnabled(selectedImageUri != null && !busy);
         }
