@@ -23,7 +23,9 @@ if HAS_API_DEPS:
     warnings.filterwarnings("ignore", message="Using `httpx` with `starlette.testclient` is deprecated.*")
     from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
+    import clearscan_cv.api as api_module  # noqa: E402
     from clearscan_cv.api import app  # noqa: E402
+    from clearscan_cv.ocr import OcrLine, OcrResult  # noqa: E402
 
 
 def make_api_document() -> bytes:
@@ -113,6 +115,49 @@ class ApiTest(unittest.TestCase):
         self.assertTrue(pdf_payload.startswith(b"%PDF-1.4"))
         self.assertIn(b"/Count 2", pdf_payload)
         self.assertEqual(pdf_payload.count(b"/Type /Page /Parent"), 2)
+
+    def test_process_batch_endpoint_returns_searchable_pdf_and_layout_with_mock_ocr(self) -> None:
+        original_recognize = api_module.recognize_image
+
+        def fake_recognize(image: np.ndarray, language: str = "jpn+eng", engine: str = "auto") -> OcrResult:
+            height, width = image.shape[:2]
+            line = OcrLine("API OCR", 97.0, (max(1, width // 5), max(1, height // 5), max(1, width // 3), 24))
+            return OcrResult("fake", language, "API OCR", 97.0, width, height, [line])
+
+        api_module.recognize_image = fake_recognize
+        try:
+            response = self.client.post(
+                "/api/process-batch",
+                files=[
+                    ("files", ("page-one.jpg", make_api_document(), "image/jpeg")),
+                    ("files", ("page-two.jpg", make_api_document(), "image/jpeg")),
+                ],
+                data={
+                    "mode": "gray",
+                    "searchable_pdf": "true",
+                    "ocr": "true",
+                    "layout": "true",
+                    "docx": "true",
+                    "readability": "true",
+                },
+            )
+        finally:
+            api_module.recognize_image = original_recognize
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        pdf_payload = base64.b64decode(payload["pdf_base64"])
+        docx_payload = base64.b64decode(payload["docx_base64"])
+
+        self.assertTrue(payload["pdf_searchable"])
+        self.assertEqual(payload["page_count"], 2)
+        self.assertEqual(payload["pages"][0]["ocr"]["text"], "API OCR")
+        self.assertIn("layout_markdown", payload["pages"][0])
+        self.assertIn("Page 1", payload["layout_markdown"])
+        self.assertIn("readability", payload["pages"][0])
+        self.assertTrue(pdf_payload.startswith(b"%PDF-1.4"))
+        self.assertEqual(pdf_payload.count(b"3 Tr"), 2)
+        self.assertTrue(docx_payload.startswith(b"PK"))
 
     def test_ocr_status_endpoint_reports_backends_without_ocr_dependency(self) -> None:
         response = self.client.get("/api/ocr/status", params={"language": "jpn+eng"})

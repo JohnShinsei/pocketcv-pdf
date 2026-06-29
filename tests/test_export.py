@@ -69,6 +69,37 @@ class ExportTest(unittest.TestCase):
         self.assertEqual(pdf.count(b"/Type /Page /Parent"), 2)
         self.assertEqual(pdf.count(b"/Subtype /Image"), 2)
 
+    def test_builds_multi_page_searchable_pdf(self) -> None:
+        first = make_scan_image()
+        second = cv2.rotate(make_scan_image(), cv2.ROTATE_90_CLOCKWISE)
+        first_ocr = OcrResult(
+            "fake",
+            "eng",
+            "First",
+            95.0,
+            first.shape[1],
+            first.shape[0],
+            [OcrLine("First", 95.0, (32, 60, 80, 28))],
+        )
+        second_ocr = OcrResult(
+            "fake",
+            "eng",
+            "Second",
+            93.0,
+            second.shape[1],
+            second.shape[0],
+            [OcrLine("Second", 93.0, (28, 52, 96, 28))],
+        )
+
+        pdf = build_pdf_pages_bytes([first, second], title="batch", ocr_results=[first_ocr, second_ocr], searchable=True)
+
+        self.assertTrue(pdf.startswith(b"%PDF-1.4"))
+        self.assertIn(b"/Count 2", pdf)
+        self.assertEqual(pdf.count(b"/Type /Page /Parent"), 2)
+        self.assertEqual(pdf.count(b"3 Tr"), 2)
+        self.assertIn("First".encode("utf-16-be").hex().upper().encode("ascii"), pdf)
+        self.assertIn("Second".encode("utf-16-be").hex().upper().encode("ascii"), pdf)
+
     def test_write_pdf_pages_reports_page_metadata(self) -> None:
         first = make_scan_image()
         second = cv2.rotate(make_scan_image(), cv2.ROTATE_90_CLOCKWISE)

@@ -452,6 +452,18 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("useGatosSauvola", html)
         self.assertIn("useFrequencyDeshadow", html)
         self.assertIn("rawHistogram", html)
+        histogram_definition = html.find("const histogram = new Array(256).fill(0);")
+        histogram_use = html.find(
+            "const connectedCandidate = detectConnectedPaperQuad(sourceCanvas, image, step, histogram, samples)"
+        )
+        self.assertNotEqual(histogram_definition, -1)
+        self.assertNotEqual(histogram_use, -1)
+        self.assertLess(histogram_definition, histogram_use)
+        normalized_histogram_definition = html.find("const normalizedHistogram = new Array(256).fill(0);")
+        normalized_histogram_use = html.find("otsuThreshold(normalizedHistogram, pixelCount)")
+        self.assertNotEqual(normalized_histogram_definition, -1)
+        self.assertNotEqual(normalized_histogram_use, -1)
+        self.assertLess(normalized_histogram_definition, normalized_histogram_use)
         self.assertIn("normalizedSquaredIntegral", html)
         self.assertIn("antialiasGuard", html)
         self.assertIn("textEdge = inkLum[pixel] > 118", html)
@@ -493,7 +505,7 @@ class PipelineTest(unittest.TestCase):
         worker = (ROOT / "src" / "clearscan_cv" / "static" / "sw.js").read_text(encoding="utf-8")
 
         self.assertIn("CACHE_NAME", worker)
-        self.assertIn("pocketcv-pdf-v11", worker)
+        self.assertIn("pocketcv-pdf-v12", worker)
         self.assertIn("install", worker)
         self.assertIn("fetch", worker)
         self.assertIn("event.request.mode === \"navigate\"", worker)

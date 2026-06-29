@@ -68,8 +68,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("input is required unless --ocr-status is used")
     if len(args.inputs) > 1 and args.corners:
         parser.error("--corners can only be used with one input image")
-    if len(args.inputs) > 1 and (args.ocr or args.layout or args.searchable_pdf or args.docx):
-        parser.error("multiple inputs currently support scan image/PDF output; OCR layout exports require one input")
+    if len(args.inputs) > 1 and args.expected_text:
+        parser.error("--expected-text can only be used with one input image")
     if args.no_warp and args.corners:
         parser.error("--corners cannot be combined with --no-warp")
     try:
@@ -82,6 +82,8 @@ def main(argv: list[str] | None = None) -> int:
         output_dir.mkdir(parents=True, exist_ok=True)
         reports: list[dict[str, object]] = []
         output_images: list[np.ndarray] = []
+        ocr_results = []
+        layout_pages: list[str] = []
         for page_index, input_path in enumerate(args.inputs, start=1):
             output_stem = f"{page_index:03d}_{Path(input_path).stem}"
             page_report = process_file(
@@ -94,10 +96,31 @@ def main(argv: list[str] | None = None) -> int:
                 output_stem=output_stem,
             )
             page_report["page_index"] = page_index
-            output_image = _read_image(page_report["output_path"])
+            page_output_path = Path(str(page_report["output_path"]))
+            output_image = _read_image(page_output_path)
             output_images.append(output_image)
+            ocr_result = None
+            if args.ocr or args.layout or args.searchable_pdf or args.docx:
+                try:
+                    ocr_result = recognize_image(output_image, language=args.ocr_lang, engine=args.ocr_engine)
+                except OcrUnavailableError as exc:
+                    parser.exit(2, f"OCR engine unavailable: {exc}\n")
+                text_path = page_output_path.with_name(f"{page_output_path.stem}_ocr.txt")
+                text_path.write_text(ocr_result.text, encoding="utf-8")
+                page_report["ocr"] = ocr_result.to_dict()
+                page_report["ocr_text_path"] = str(text_path)
+
+                if args.layout or args.docx:
+                    layout_markdown = recover_layout_markdown(ocr_result)
+                    layout_path = page_output_path.with_name(f"{page_output_path.stem}_layout.md")
+                    layout_path.write_text(layout_markdown, encoding="utf-8")
+                    page_report["ocr_layout_path"] = str(layout_path)
+                    layout_pages.append(
+                        f"## Page {page_index}: {Path(input_path).name}\n\n{layout_markdown or ocr_result.text}".strip()
+                    )
+            ocr_results.append(ocr_result)
             if args.readability:
-                page_report["readability"] = evaluate_readability(output_image)
+                page_report["readability"] = evaluate_readability(output_image, ocr_result=ocr_result)
                 Path(str(page_report["report_path"])).write_text(json.dumps(page_report, indent=2), encoding="utf-8")
             reports.append(page_report)
 
@@ -108,9 +131,34 @@ def main(argv: list[str] | None = None) -> int:
             "page_count": len(reports),
             "reports": reports,
         }
-        if args.pdf:
-            pdf_path = output_dir / "clearscan_batch_scan.pdf"
-            pdf_export = write_pdf_pages(output_images, pdf_path, title="clearscan-batch", searchable=False)
+        if args.ocr:
+            ocr_text_path = output_dir / "clearscan_batch_ocr.txt"
+            ocr_text_path.write_text(
+                "\n\n".join(
+                    f"--- Page {index + 1}: {Path(args.inputs[index]).name} ---\n{result.text if result else ''}"
+                    for index, result in enumerate(ocr_results)
+                ),
+                encoding="utf-8",
+            )
+            batch_report["batch_ocr_text_path"] = str(ocr_text_path)
+        if args.layout or args.docx:
+            layout_path = output_dir / "clearscan_batch_layout.md"
+            layout_path.write_text("\n\n".join(layout_pages), encoding="utf-8")
+            batch_report["batch_layout_path"] = str(layout_path)
+        if args.docx:
+            docx_path = output_dir / "clearscan_batch_layout.docx"
+            docx_export = write_docx("\n\n".join(layout_pages), docx_path, title="clearscan-batch")
+            batch_report["docx"] = docx_export.to_dict()
+            batch_report["batch_docx_path"] = str(docx_path)
+        if args.pdf or args.searchable_pdf:
+            pdf_path = output_dir / f"clearscan_batch_{'searchable' if args.searchable_pdf else 'scan'}.pdf"
+            pdf_export = write_pdf_pages(
+                output_images,
+                pdf_path,
+                title="clearscan-batch",
+                ocr_results=ocr_results if args.searchable_pdf else None,
+                searchable=args.searchable_pdf,
+            )
             batch_report["pdf"] = pdf_export.to_dict()
             batch_report["batch_pdf_path"] = str(pdf_path)
 
